@@ -58,17 +58,21 @@ def add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_weather_history(cfg: Dict,
-                         wind_csv: str = '../data/dtn_hist_30min.csv',
-                         solar_csv: str = '../data/solcast_hist_30min.csv',
-                         qm_path: str = '../data/dtn_weather_89002_86338_qm.csv'
-                         ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def load_weather_history(cfg: Dict, data_dir: str, apply_qm: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Load half-hourly weather from local CSVs; return (weather_wide, wind_raw).
+
+    Reads dtn_hist_30min.csv, solcast_hist_30min.csv and dtn_weather_89002_86338_qm.csv
+    from `data_dir`.
 
     weather_wide has one column per metric and station (e.g. 'wind_speed_kph_89002'),
     plus wind speed in m/s, wind-direction sin/cos and solar columns, on a 30-min grid.
-    wind_speed_kph for stations 89002/86338 is overridden by the quantile-mapped (QM) file.
+    If apply_qm is True, wind_speed_kph for stations 89002/86338 is overridden by the
+    quantile-mapped (QM) file; set it to False to get the raw DTN data.
     """
+    wind_csv = os.path.join(data_dir, 'dtn_hist_30min.csv')
+    solar_csv = os.path.join(data_dir, 'solcast_hist_30min.csv')
+    qm_path = os.path.join(data_dir, 'dtn_weather_89002_86338_qm.csv')
+
     start, end = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
     stations = cfg['station_ids']
 
@@ -100,15 +104,16 @@ def load_weather_history(cfg: Dict,
 
     # QM override: only wind_speed_kph for 89002/86338 is replaced;
     # temp_c, rh and wind_dir_degrees keep the original data
-    qm_df = pd.read_csv(qm_path, parse_dates=['datetime'], index_col='datetime')
-    print(f'QM file loaded: {len(qm_df):,} rows, cols: {list(qm_df.columns)}')
-    overlap = wind_wide.index.intersection(qm_df.index)
-    for stn in [89002, 86338]:
-        ws_col = f'wind_speed_kph_{stn}'
-        if ws_col in qm_df.columns and ws_col in wind_wide.columns:
-            wind_wide.loc[overlap, ws_col] = qm_df.loc[overlap, ws_col].values
-    n_qm = int(qm_df['qm_corrected'].sum()) if 'qm_corrected' in qm_df.columns else 0
-    print(f'QM overlay applied to wind_speed_kph only: {len(overlap):,} HH matched, {n_qm:,} HH were QM-corrected')
+    if apply_qm:
+        qm_df = pd.read_csv(qm_path, parse_dates=['datetime'], index_col='datetime')
+        print(f'QM file loaded: {len(qm_df):,} rows, cols: {list(qm_df.columns)}')
+        overlap = wind_wide.index.intersection(qm_df.index)
+        for stn in [89002, 86338]:
+            ws_col = f'wind_speed_kph_{stn}'
+            if ws_col in qm_df.columns and ws_col in wind_wide.columns:
+                wind_wide.loc[overlap, ws_col] = qm_df.loc[overlap, ws_col].values
+        n_qm = int(qm_df['qm_corrected'].sum()) if 'qm_corrected' in qm_df.columns else 0
+        print(f'QM overlay applied to wind_speed_kph only: {len(overlap):,} HH matched, {n_qm:,} HH were QM-corrected')
 
     # Derived wind features per station
     for station in stations:

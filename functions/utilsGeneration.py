@@ -44,7 +44,7 @@ def filter_generation_data(generationData:pd.DataFrame,
 
     # Extend exclusion periods to entire month when more than 10 days is excluding
     if extendExclusions:
-        print("...extending exclusions")
+        print("Extending exclusions")
         exclusionPeriods = extend_exclusion_periods(exclusionPeriods)
 
     filteredData = pd.DataFrame(index=generationData.index)
@@ -62,7 +62,6 @@ def filter_generation_data(generationData:pd.DataFrame,
         # Exclude periods of obvious operational adjustments
         if asset in list(exclusionPeriods['DUID'].unique()):
             for idx, exclusion in exclusionPeriods[exclusionPeriods['DUID'] == asset].iterrows():
-                print(exclusion)
                 filterExclusion = ((df.index >= exclusion['ExclusionStart']) & (df.index <= exclusion['ExclusionEnd']))
                 filterDate = filterDate & [not v for v in filterExclusion]
             print("...data points filtered for commissioning & exclusions : {} ({}%)".format(len(df) - filterDate.sum(),np.round(((len(df) - filterDate.sum())/len(df))*100)))

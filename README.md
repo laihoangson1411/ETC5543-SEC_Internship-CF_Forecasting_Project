@@ -35,9 +35,9 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 ├── analysis/
 │   ├── IDA_ContractFactors.qmd
 │   ├── IDA_Weather_SolarIrradiance.qmd
-│   ├── EDA.qmd # Also include LGC's EDA in here
 │   ├── Wind_QuantileMapping.qmd
-│   ├── SolarProxy_Cal.qmd 
+│   ├── SolarProxy_Cal.qmd
+│   ├── EDA.qmd # Also include LGC's EDA in here
 │   ├── WindCF_Analysis.qmd
 │   ├── SolarCF_Analysis.qmd
 │   └── CF_Forecast_FY27-29.qmd

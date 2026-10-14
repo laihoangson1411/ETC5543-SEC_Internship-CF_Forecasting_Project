@@ -12,6 +12,7 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   │   ├── GenerationMW_FY19-26.csv # NEMSight_VICVREGeneration_FY19-26_MW.csv
 │   │   ├── HistoricSolarIrradiance_30min.csv # solcast_hist_30min.csv
 │   │   ├── PriceForecast_30min.csv # VIC_Central_30min_PriceForecast.csv
+│   │   ├── PriceForecast_Month.csv # 20261001_ASXadjustedPrice.csv 
 │   │   └── Asset.csv # VRETAsset.csv
 │   ├── processed/
 │   │   ├── QM_HistoricWeather_30min.csv # dtn_weather_89002_86338_qm.csv, write csv from Wind_QuantileMapping.qmd

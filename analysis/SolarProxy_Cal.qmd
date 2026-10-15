@@ -1,0 +1,267 @@
+---
+title: Solar proxy calculation
+jupyter: python3
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    code-fold: true          # code is collapsed under a "Code" toggle
+    code-overflow: wrap
+    embed-resources: true
+    grid:
+      body-width: 1100px   # wider text column so the large figures stay readable
+      margin-width: 250px
+    include-in-header:
+      text: |
+        <style>
+        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
+        .cell-output-display img { max-width: 100%; height: auto; }
+        </style>
+---
+
+**Goal.** Build a monthly *solar proxy* (`proxy_solar`): a number that says how well the sun's shape matches the price shape, using only weather and price. Nothing is fitted on the solar contract factor (CF).
+
+**Idea.** Contract factor is DWAP / TWAP, where DWAP is the generation-weighted price. The proxy uses the same formula, but replaces generation with solar irradiance (GHI):
+
+$$\text{proxy}_m = \frac{\sum_t \text{GHI}_t \cdot \max(P_t, 0)}{\sum_t \text{GHI}_t} \Big/ \text{TWAP}_m$$
+
+It uses the actual half-hourly GHI of station 85280 (÷ 1000), so it explains past months.
+
+**Flow**
+
+1. Set-up: load data and build the monthly solar CF target
+2. `proxy_solar` from actual GHI
+
+3. Validation against the actual solar CF
+
+4. Save the proxy file
+
+**Output:** `data/processed/SolarProxy.csv`.
+
+## 1. Set-up
+
+```{python}
+# =============================================================================
+# CELL 1.1 -- Imports, configuration and data loading
+# Loads generation (MLF- and capacity-scaled) and half-hourly weather from utilsData.
+# Solar uses the ORIGINAL weather: the quantile mapping only concerns wind speed,
+# so apply_qm=False (and the QM file is not needed).
+# =============================================================================
+
+import os, sys, warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from IPython.display import display, Markdown
+
+warnings.filterwarnings('ignore')
+
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
+
+from utilsContractFactors import convertUnits, getFY, aggregateContractFactorsByGenType
+from utilsData import (load_generation_inputs, load_weather_history, build_targets,
+                       month_end_labels, add_calendar_features)
+
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
+
+cfg = {
+    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
+    'train_fys': [2023, 2024, 2025],              # years used for the best-station check
+    'test_fys': [2026],
+    'analysis_start': '2022-07-01 00:00:00',
+    'analysis_end': '2026-06-30 23:30:00',
+    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
+    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
+    'station_ids': [85280, 86338, 89002],
+    'solar_proxy_station': 85280,                 # single GHI station used for the proxy
+    'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
+}
+
+gen_scaled, vret_data, capacity = load_generation_inputs(cfg, DATA_DIR)
+weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=False)
+
+print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+print(f"Solar assets: {cfg['solar_assets']}, solar capacity = {capacity['SOLAR']:.1f} MW")
+```
+
+The monthly target (`SOLAR_ContractFactor`, TWAP) comes from `build_targets`. It is used only to **check** the proxy, never to build it.
+
+```{python}
+# =============================================================================
+# CELL 1.2 -- Monthly target and half-hourly price
+# target   monthly CF per asset and TWAP (utilsData.build_targets; CF = DWAP+ / TWAP, zero-dollar floor),
+#          then the 3 solar assets are combined into one 'SOLAR' fleet column (SOLAR_ContractFactor)
+# price    half-hourly VIC1 price
+# =============================================================================
+
+monthly_target = build_targets(gen_scaled, cfg, capacity)
+monthly_target = aggregateContractFactorsByGenType(monthly_target, cfg['solar_assets'], 'SOLAR')
+price = gen_scaled['VIC1Price']
+
+print(f'{len(monthly_target)} monthly rows: {monthly_target.index.min():%Y-%m} -> {monthly_target.index.max():%Y-%m}')
+display(monthly_target[['SOLAR_ContractFactor', 'VIC1Price_TWAP']].round(3).head(3))
+```
+
+```{python}
+# =============================================================================
+# CELL 1.3 -- Plot helpers (same as the wind notebook)
+# add_titles   bold title with an italic insight line below it (call after tight_layout)
+# table_title  bold caption above a displayed table
+# =============================================================================
+
+plt.rcParams.update({'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
+                     'axes.spines.top': False, 'axes.spines.right': False})
+
+
+def add_titles(fig, title, subtitle=None):
+    """Bold figure title with an optional one-line insight (subtitle) below it.
+
+    Call after fig.tight_layout(); the text is placed just above the top of the figure.
+    """
+    def put(text, offset_pt, **kw):
+        fig.add_artist(mpl.text.Annotation(text, xy=(0.5, 1.0), xycoords='figure fraction',
+                                           xytext=(0, offset_pt), textcoords='offset points',
+                                           ha='center', va='bottom', **kw))
+    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
+    if subtitle:
+        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+
+
+def table_title(title, note=None):
+    """Print a bold table caption (and an optional italic note) above display(df)."""
+    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
+```
+
+## 2. Proxy from actual GHI (`proxy_solar`)
+
+For each month the proxy is $\sum \text{GHI}\cdot\max(P,0) \,/\, \sum \text{GHI} \,/\, \text{TWAP}$.
+
+- **One station.** Station 85280 (GHI ÷ 1000) is used for all solar assets: lowest variance and best fit in earlier tests. It is *not* a lookup table (unlike the wind proxy).
+- **Best station per asset** (highest training correlation with the asset CF) is only printed as a sanity check.
+- **`solar_share`** = active solar capacity ÷ full solar capacity. It flags months when an asset was excluded (no generation data) and is saved with the proxy.
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- proxy_solar (monthly)
+# compute_proxy_solar  price-weighted monthly aggregation of the GHI driver
+# best-station check   train-only correlation of each station's GHI with the asset CF (logged only)
+# =============================================================================
+
+
+def compute_proxy_solar(price, solar_x, solar_cap, labels, full_solar_capacity):
+    """Monthly solar proxy, TWAP, solar_share and data coverage from half-hourly inputs."""
+    df = pd.DataFrame({'price': price, 'pos_price': price.clip(lower=0),
+                       'solar_x': solar_x, 'solar_cap': solar_cap}, index=price.index)
+    df['coverage_flag'] = (~df[['price', 'solar_x']].isna().any(axis=1)).astype(float)
+
+    grouped = pd.DataFrame(index=pd.Index(sorted(pd.unique(labels)), name='Time-ending'))
+    grouped['twap'] = df['price'].groupby(labels).mean()
+    grouped['proxy_solar'] = ((df['solar_x'] * df['pos_price']).groupby(labels).sum(min_count=1)
+                              / df['solar_x'].groupby(labels).sum(min_count=1) / grouped['twap'])
+    # solar_share = active capacity / full capacity (0-1): availability flag
+    grouped['solar_share'] = (df['solar_cap'] / full_solar_capacity).groupby(labels).mean()
+    grouped['coverage'] = df['coverage_flag'].groupby(labels).mean()
+    grouped.replace([np.inf, -np.inf], np.nan, inplace=True)
+    return add_calendar_features(grouped)
+
+
+# Active solar capacity at each half-hour: capacity of the assets that have generation data
+solar_cap = sum((~gen_scaled[a].isna()).astype(float) * capacity[a] for a in cfg['solar_assets'])
+
+# Driver: GHI of the chosen station, W/m2 -> kW/m2
+stn = cfg['solar_proxy_station']
+solar_x = weather_hh[f'ghi_{stn}'] / 1000
+print(f'Driver: station {stn} GHI / 1000 (mean = {solar_x.mean():.3f})')
+
+monthly_proxy = compute_proxy_solar(price, solar_x, solar_cap, month_end_labels(gen_scaled.index),
+                                    full_solar_capacity=capacity['SOLAR'])
+
+# Sanity check (logged only): which station correlates best with each asset CF in the training years?
+train_hh = pd.Series(getFY(gen_scaled.index).isin(cfg['train_fys']), index=gen_scaled.index)
+train_w = train_hh.reindex(weather_hh.index, fill_value=False)
+best_station = {}
+for a in cfg['solar_assets']:
+    cf_a = (convertUnits(gen_scaled[a].fillna(0), 'MWh', 'MW')
+            / ((~gen_scaled[a].isna()).astype(float) * capacity[a]).replace(0, np.nan))
+    corrs = {s: weather_hh.loc[train_w, f'ghi_{s}'].corr(cf_a.loc[train_hh.reindex(cf_a.index, fill_value=False)])
+             for s in cfg['station_ids'] if f'ghi_{s}' in weather_hh.columns}
+    best_station[a] = max(corrs, key=corrs.get)
+print('Best-correlated station per asset (logged only):', best_station)
+
+table_title('Table 2.1 - proxy_solar summary', 'monthly values, all months')
+display(monthly_proxy[['proxy_solar', 'solar_share', 'twap', 'coverage']].describe().round(4))
+```
+
+## 3. Validation
+
+The proxy should move together with the actual solar CF. The left plot shows the same months; a good proxy follows the CF up and down. The right plot shows the same values as a scatter.
+
+```{python}
+# =============================================================================
+# CELL 3.1 -- proxy_solar vs actual solar CF
+# Left   monthly time series (actual CF, proxy_solar)
+# Right  scatter proxy vs CF (r = Pearson correlation; shaded = test year)
+# Table  correlation with the CF for all months, training years and test year
+# =============================================================================
+
+val = pd.DataFrame({'CF': monthly_target['SOLAR_ContractFactor'],
+                    'proxy_solar': monthly_proxy['proxy_solar'],
+                    'FY': monthly_target['FY']}).dropna()
+is_test = val['FY'].isin(cfg['test_fys'])
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 4.8), gridspec_kw={'width_ratios': [1.6, 1]})
+
+ax = axes[0]
+ax.plot(val.index, val['CF'], 'k-o', ms=3, lw=1.5, label='actual solar CF')
+ax.plot(val.index, val['proxy_solar'], '-', color='#d95f02', lw=1.2, label='proxy_solar (actual GHI)')
+test_start = val.index[is_test].min() if is_test.any() else None
+if test_start is not None:
+    ax.axvspan(test_start - pd.offsets.MonthEnd(1), val.index.max(), color='grey', alpha=0.12, label='test year')
+ax.set_ylabel('CF / proxy')
+ax.legend(fontsize=8)
+
+ax = axes[1]
+r = val['proxy_solar'].corr(val['CF'])
+ax.scatter(val['proxy_solar'], val['CF'], s=22, color='#d95f02', alpha=0.8, label=f'proxy_solar (r = {r:.2f})')
+lo, hi = val[['CF', 'proxy_solar']].min().min(), val[['CF', 'proxy_solar']].max().max()
+ax.plot([lo, hi], [lo, hi], 'k:', lw=0.8)
+ax.set_xlabel('proxy'); ax.set_ylabel('actual solar CF')
+ax.legend(fontsize=8)
+
+fig.tight_layout()
+add_titles(fig, 'Solar proxy vs actual solar contract factor',
+           f"Correlation with the actual CF: r = {r:.2f}")
+plt.show()
+
+rows = {'All months': val, 'Training years': val[~is_test], 'Test year': val[is_test]}
+corr_tbl = pd.DataFrame({name: {'n months': len(d),
+                                'corr(CF, proxy_solar)': d['proxy_solar'].corr(d['CF'])}
+                         for name, d in rows.items()}).T
+table_title('Table 3.1 - correlation of proxy_solar with the actual solar CF')
+display(corr_tbl.round(3).style.format({'n months': '{:.0f}'}))
+```
+
+## 4. Save
+
+The file has one row per month. `proxy_solar` is the proxy; `twap`, `solar_share` and `coverage` are kept so the proxy can be read with its context (`coverage` = share of half-hours with both price and GHI).
+
+```{python}
+# =============================================================================
+# CELL 4.1 -- Save data/processed/SolarProxy.csv
+# =============================================================================
+
+out_cols = ['proxy_solar', 'twap', 'solar_share', 'coverage', 'month', 'FY']
+out_path = os.path.join(DATA_DIR, 'processed', 'SolarProxy.csv')
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+monthly_proxy[out_cols].to_csv(out_path)
+
+print(f'Saved {len(monthly_proxy)} monthly rows -> {os.path.relpath(out_path, ROOT)}')
+display(monthly_proxy[out_cols].round(4).tail(3))
+```

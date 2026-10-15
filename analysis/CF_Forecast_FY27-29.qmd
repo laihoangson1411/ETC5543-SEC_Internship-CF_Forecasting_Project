@@ -1,0 +1,543 @@
+---
+title: "Contract factor forecast FY27-29"
+jupyter: python3
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    code-fold: true          # code is collapsed under a "Code" toggle
+    code-overflow: wrap
+    embed-resources: true
+    grid:
+      body-width: 1100px   # wider text column so the large figures stay readable
+      margin-width: 250px
+    include-in-header:
+      text: |
+        <style>
+        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
+        .cell-output-display img { max-width: 100%; height: auto; }
+        </style>
+---
+
+**Goal.** Forecast the monthly contract factor (CF = DWAP+ / TWAP, zero-dollar floor) of the **wind** and **solar** portfolios for FY27, FY28 and FY29. Every model of `WindCF_Analysis.qmd` and `SolarCF_Analysis.qmd` is retrained on all the history (FY23-26) and **every model is written to its own csv**, not only the best one.
+
+**Scenario forecast.** For each future month the model gets the *historical* weather of the same calendar month (FY23, FY24, FY25 and FY26) and the price structure of that month, re-targeted to the forecast TWAP `T` and the forecast LGC price. The forecast is the **median** over the 4 historical years; the min and max are the band. Negative prices are shrunk by the LGC factor and positive prices are rescaled so the month's TWAP equals `T` (as in `WindCF_Analysis.qmd`, section 4).
+
+**Inputs** (`data/raw/`)
+
+- `PriceForecast_Month.csv`: ASX adjusted monthly price, columns date, September and August. These are the two T sources used now, `ASX_Sep` and `ASX_Aug`.
+
+- `HistoricLGCPrice.csv` and `ForecastedLGCPrice.csv`: LGC price. 
+
+- The historical CF, generation and weather come from the same files as in `WindCF_Analysis.qmd` and `SolarCF_Analysis.qmd`.
+
+**Output** (`data/forecast/`). One file per model, `FY27-29_<Model>.csv`, with the wind and the solar rows in the same file (column `asset_type`). Each part replaces its own rows and keeps the other part, so the wind and the solar parts can be run in any order.
+
+**Flow**
+
+1. Set-up: libraries, configuration, data, helpers
+
+2. Forecast inputs: the T sources and the LGC price
+
+3. Wind: retrain on FY23-26, forecast FY27-29, write the csv files
+
+4. Solar: retrain on FY23-26, forecast FY27-29, write the csv files
+
+## 1. Set-up
+
+```{python}
+# =============================================================================
+# CELL 1.1 -- Imports, configuration and data loading
+# Imports libraries and the project functions, sets the data folder, defines `cfg`
+# (assets, weather stations, training years, input files, model settings) and loads the data.
+#  - the half-hourly price (for the price split and the depth model) and the weather come from utilsData
+#    (wind speed uses the quantile-mapped file written by Wind_QuantileMapping.qmd)
+#  - lgc_m: monthly historical LGC price (month-start index)
+# =============================================================================
+
+import os, sys, warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.transforms import ScaledTranslation
+from IPython.display import display, Markdown
+
+warnings.filterwarnings('ignore')
+
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
+
+from utilsContractFactors import expfunctionCF
+from utilsData import load_generation_inputs, load_weather_history, add_calendar_features, month_end_labels
+from utilsScenario import load_forward_twap_monthly, build_scenario_features, monthly_depth
+import utilsModels
+from utilsModels import run_linear, run_ridge, run_rf, run_xgb, run_all_models, predict_cf
+
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/, processed/ and forecast/
+
+cfg = {
+    'random_seed': 42,
+    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
+
+    # Models are retrained on all the history. `test_fys` is only there because run_all_models needs a test
+    # year to run; its in-sample scores are not used.
+    'train_fys': [2023, 2024, 2025, 2026],
+    'test_fys': [2026],
+    'analysis_start': '2022-07-01 00:00:00',
+    'analysis_end': '2026-06-30 23:30:00',
+
+    # Assets and weather stations
+    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
+    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
+    'station_ids': [85280, 86338, 89002],         # stations read from the weather files
+    'wind_stations': [86338, 89002],              # DTN stations averaged into the monthly wind features
+    'solar_stations': [85280, 86338, 89002],      # Solcast stations averaged into the monthly solar features
+    'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
+
+    # Input files
+    'cf_csv': os.path.join(DATA_DIR, 'processed', 'HistoricContractFactors.csv'),      # monthly CF (IDA_ContractFactors.qmd)
+    'lgc_hist_csv': os.path.join(DATA_DIR, 'raw', 'HistoricLGCPrice.csv'),             # monthly LGC price, history
+    'lgc_fc_csv': os.path.join(DATA_DIR, 'raw', 'ForecastedLGCPrice.csv'),             # LGC price, forecast
+    'forward_curve_csv': os.path.join(DATA_DIR, 'raw', 'PriceForecast_30min.csv'),     # 30-min forward prices
+    'asx_csv': os.path.join(DATA_DIR, 'raw', 'PriceForecast_Month.csv'),               # ASX adjusted monthly price
+    'forecast_dir': os.path.join(DATA_DIR, 'forecast'),                                # output folder
+
+    # Model settings (same as WindCF_Analysis.qmd)
+    'rf_params': {'n_estimators': 300, 'max_depth': 4, 'min_samples_leaf': 2, 'random_state': 42},
+    'xgb_params': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.05, 'subsample': 0.9,
+                   'colsample_bytree': 0.9, 'reg_lambda': 1.0, 'random_state': 42},
+    'alpha_grid': np.logspace(0, 2, 15),          # candidate alphas for RidgeCV
+}
+np.random.seed(cfg['random_seed'])
+
+gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
+weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=True)    # wind speed: quantile-mapped
+price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
+
+# Historical LGC price; utf-8-sig strips the BOM that Excel adds to CSV files
+lgc_prices = pd.read_csv(cfg['lgc_hist_csv'], index_col=0, parse_dates=True, dayfirst=True, encoding='utf-8-sig')
+lgc_m = lgc_prices['LGC'].resample('MS').mean().rename('lgc')         # snap to month-start
+print(f'LGC prices: {len(lgc_prices)} rows, {lgc_prices.index.min():%Y-%m} to {lgc_prices.index.max():%Y-%m}')
+print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+```
+
+```{python}
+# =============================================================================
+# CELL 1.2 -- Helpers
+# add_titles      bold title with an italic insight line below it (call after tight_layout)
+# table_title     bold caption above a displayed table
+# write_forecast  write the forecast of one asset type into one csv per model; the rows of the other asset
+#                 type (wind / solar) already in the file are kept
+# =============================================================================
+
+plt.rcParams.update({'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
+                     'axes.spines.top': False, 'axes.spines.right': False,
+                     'font.size': 9, 'axes.titlesize': 9.5, 'xtick.labelsize': 8,
+                     'ytick.labelsize': 8, 'legend.fontsize': 8})
+
+
+def add_titles(fig, title, subtitle=None):
+    """Bold figure title with an optional one-line insight (subtitle) below it.
+
+    Call after fig.tight_layout(); the text is placed just above the top of the figure.
+    """
+    def put(text, offset_pt, **kw):
+        # figure-fraction x, y = top edge of the figure, then shifted up by offset_pt points
+        shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
+        fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
+    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
+    if subtitle:
+        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+
+
+def table_title(title, note=None):
+    """Print a bold table caption (and an optional italic note) above display(df)."""
+    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
+
+
+FILE_NAME = {'Linear': 'Linear', 'Ridge': 'Ridge', 'RF': 'RF', 'XGBoost': 'XGB',
+             'Ensemble': 'Ensemble', 'Exponential': 'Exponential'}          # model -> name in the csv file
+CSV_COLUMNS = ['asset_type', 't_source', 'Time-ending', 'FY', 'CF_median', 'CF_lo', 'CF_hi', 'TWAP', 'LGC']
+
+
+def write_forecast(fc: pd.DataFrame, asset_type: str, fys: list, out_dir: str) -> pd.DataFrame:
+    """Write FY27-29_<Model>.csv for every model in `fc` and return a small log of the files.
+
+    Args:
+        fc: Forecast table with columns method, t_source, month, FY, CF_median, CF_lo, CF_hi, TWAP, LGC.
+        asset_type: 'WIND' or 'SOLAR'. Rows of this type already in a file are replaced; other rows are kept.
+        fys: Forecast financial years, used in the file name (e.g. [2027, 2028, 2029] -> FY27-29).
+        out_dir: Output folder (created if needed).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    log = []
+    for method, g in fc.groupby('method', sort=False):
+        path = os.path.join(out_dir, f'FY{fys[0] % 100}-{fys[-1] % 100}_{FILE_NAME[method]}.csv')
+        new = g.assign(asset_type=asset_type).rename(columns={'month': 'Time-ending'})[CSV_COLUMNS]
+        if os.path.exists(path):                                   # keep the rows of the other asset type
+            old = pd.read_csv(path, parse_dates=['Time-ending'])
+            new = pd.concat([old[old['asset_type'] != asset_type], new], ignore_index=True)
+        new = new.sort_values(['asset_type', 't_source', 'Time-ending'])
+        new.to_csv(path, index=False)
+        log.append({'file': os.path.basename(path), 'rows in file': len(new),
+                    f'{asset_type} rows': int((new['asset_type'] == asset_type).sum()),
+                    'months without forecast': int(g['CF_median'].isna().sum())})
+    return pd.DataFrame(log).set_index('file')
+```
+
+## 2. Forecast inputs
+
+The two inputs that change from one forecast to the next. **T** is the monthly TWAP the models are told to forecast, from the ASX adjusted price for September (`ASX_Sep`) and August (`ASX_Aug`); the forward curve (`forward`) is switched off for now. **LGC** is the certificate price used for the negative-price shrink. Table 2.1 gives the average of each by financial year.
+
+The T sources should be close to each other; a source that is far from the others will move every forecast. The LGC row shows the price the shrink uses: the historical price where it exists (up to the last month of `HistoricLGCPrice.csv`) and the forecast price after that. A lower LGC means less negative pricing, so a higher CF for wind.
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- Forecast months, T by source, LGC price and the LGC depth model
+#  future_months  month-end labels of FY27-29
+#  USE_SOURCES    the T sources used (EDIT HERE): 'ASX_Sep', 'ASX_Aug' and 'forward' (30-min forward curve, off for now)
+#  T_BY_SOURCE    forecast TWAP per month for each source in USE_SOURCES
+#  lgc_all        LGC price on a month-start index: history first, then ForecastedLGCPrice.csv
+#  fit_depth_model  depth = a + b*LGC + c1*sin + c2*cos (a_lgc, b_lgc feed utilsScenario.shrink_factor)
+# =============================================================================
+
+FORECAST_FYS = [2027, 2028, 2029]
+SCENARIO_FYS = list(cfg['train_fys'])                    # historical years that supply weather / price structure
+MODE = 'empirical'      # shrink-factor mode: 'empirical' (keeps the non-LGC floor) or 'lgc_ratio'
+DEPTH_Q = 0.05          # quantile used as the negative-price depth measure
+
+future_months = (pd.date_range(f'{FORECAST_FYS[0] - 1}-07-01', f'{FORECAST_FYS[-1]}-06-01', freq='MS')
+                 + pd.offsets.MonthEnd(0))               # Jul-26 ... Jun-29, month-end labels
+future_cal = add_calendar_features(pd.DataFrame(index=future_months))     # FY and Season of each month
+
+# --- T: ASX adjusted price (and the 30-min forward curve if switched on) ---
+USE_SOURCES = ['ASX_Sep', 'ASX_Aug']        # add 'forward' to use PriceForecast_30min.csv again
+T_MAIN = USE_SOURCES[0]                     # source used in Fig 3.1 and as the reference for the comparisons
+
+asx = pd.read_csv(cfg['asx_csv'], dayfirst=True)
+asx.columns = ['date', 'September', 'August']
+asx['date'] = pd.to_datetime(asx['date'], dayfirst=True)
+asx = asx.dropna(subset=['date']).drop_duplicates(subset='date').set_index('date').sort_index()   # the file ends with empty rows
+asx.index = asx.index + pd.offsets.MonthEnd(0)           # month-end label, like the other monthly tables
+
+T_ALL = {'ASX_Sep': asx['September'].reindex(future_months), 'ASX_Aug': asx['August'].reindex(future_months)}
+if 'forward' in USE_SOURCES:
+    T_ALL['forward'] = load_forward_twap_monthly(cfg['forward_curve_csv']).reindex(future_months)
+T_BY_SOURCE = {src: T_ALL[src] for src in USE_SOURCES}
+for src, t in T_BY_SOURCE.items():
+    assert t.notna().all(), f'T source {src} is missing months: {[m.strftime("%Y-%m") for m in t[t.isna()].index]}'
+
+# --- LGC: historical price first; later months use the forecast of their calendar year (ForecastedLGCPrice.csv) ---
+# The file has one row per calendar year: TENOR ('Cal 26') and MID POINT INDEX (the LGC price of that year).
+lgc_cal = pd.read_csv(cfg['lgc_fc_csv'], encoding='utf-8-sig')
+lgc_cal['year'] = 2000 + lgc_cal['TENOR'].str.extract(r'(\d+)')[0].astype(int)
+lgc_cal = lgc_cal.set_index('year')['MID POINT INDEX']
+months_start = future_months.to_period('M').to_timestamp()
+lgc_fc = pd.Series(lgc_cal.reindex(months_start.year).values, index=months_start)    
+
+# --- LGC: every forecast month uses the forecast of its calendar year (ForecastedLGCPrice.csv); history only before FY27 ---
+lgc_all = lgc_fc.combine_first(lgc_m)                    # the forecast price wins for the forecast months
+
+lgc_future = pd.Series(lgc_all.reindex(months_start).values, index=future_months)
+assert lgc_future.notna().all(), f'LGC price missing for {[m.strftime("%Y-%m") for m in lgc_future[lgc_future.isna()].index]}'
+
+
+def fit_depth_model(price: pd.Series, lgc: pd.Series, how=DEPTH_Q) -> dict:
+    """Fit depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist."""
+    d = pd.concat([monthly_depth(price, how), lgc], axis=1).dropna()
+    d = d[d.index <= price.index.max()]
+    month_num = d.index.month
+    X = np.column_stack([np.ones(len(d)), d['lgc'], np.sin(2 * np.pi * month_num / 12),
+                         np.cos(2 * np.pi * month_num / 12)])
+    coef, *_ = np.linalg.lstsq(X, d['depth'].values, rcond=None)
+    return {'a': coef[0], 'b': coef[1], 'months': len(d)}
+
+
+depth_fit = fit_depth_model(price_hh, lgc_m)             # fitted on the history only
+a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
+print(f'Depth model: depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC  ({depth_fit["months"]} months)  |  MODE = {MODE}')
+
+# --- Table 2.1: average T and LGC by financial year ---
+fy_label = {fy: f'FY{fy % 100}' for fy in FORECAST_FYS}
+inputs_tbl = pd.DataFrame({f'T {src} ($/MWh)': t.groupby(future_cal['FY']).mean() for src, t in T_BY_SOURCE.items()}
+                          | {'LGC ($/cert)': lgc_future.groupby(future_cal['FY']).mean()}).T.rename(columns=fy_label)
+others = [src for src in USE_SOURCES if src != T_MAIN]
+note = '; '.join(f'{src} is {(T_BY_SOURCE[src].mean() / T_BY_SOURCE[T_MAIN].mean() - 1) * 100:+.1f}% against {T_MAIN}' for src in others)
+table_title('Table 2.1 - Forecast T and LGC price by financial year', f'On average over FY27-29: {note}' if note else None)
+display(inputs_tbl.round(2))
+```
+
+## 3. Wind
+
+### 3.1 Monthly feature table
+
+One row per historical month (FY23-26) with the wind portfolio CF (`target`), the monthly TWAP, the split price features `twap_neg` / `twap_pos` (monthly mean of the negative / non-negative half-hours), `neg_share` (share of negative half-hours, needed to rescale the split to a forecast TWAP) and the driver weather. Wind speed is the quantile-mapped series.
+
+The last rows are the most recent months. A `twap_neg` of NaN means that month had no negative price; a scenario built on it has no forecast, and the median uses the other years.
+
+```{python}
+# =============================================================================
+# CELL 3.1 -- Wind: monthly feature table df_wind (same as WindCF_Analysis.qmd, cell 1.2)
+#  twap_neg / twap_pos  monthly mean of the negative / non-negative half-hourly prices
+#  neg_share            share of half-hours with a negative price
+#  wind_speed_kph, rh   monthly mean over the wind stations
+#  CF_lag12             only needed because run_all_models also fits the Seasonal Naive baseline (not forecast here)
+# =============================================================================
+
+monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
+monthly_target = add_calendar_features(monthly_target)                          # month_sin/cos, FY, Season
+
+
+def monthly_station_mean(weather_hh: pd.DataFrame, metric: str, stations: list) -> pd.Series:
+    """Monthly mean of one metric: average the given stations per half-hour, then average each month."""
+    cols = [f'{metric}_{s}' for s in stations if f'{metric}_{s}' in weather_hh.columns]
+    labels = month_end_labels(weather_hh.index)           # month-end label of every half-hour
+    return weather_hh[cols].mean(axis=1).groupby(labels).mean()
+
+
+labels_hh = month_end_labels(price_hh.index)
+df_wind = pd.DataFrame(index=monthly_target.index)
+df_wind['target'] = monthly_target['WIND_ContractFactor']
+df_wind['twap'] = monthly_target['VIC1Price_TWAP']
+df_wind['twap_neg'] = price_hh.where(price_hh < 0).groupby(labels_hh).mean().reindex(df_wind.index)
+df_wind['twap_pos'] = price_hh.where(price_hh >= 0).groupby(labels_hh).mean().reindex(df_wind.index)
+df_wind['neg_share'] = (price_hh < 0).groupby(labels_hh).mean().reindex(df_wind.index)
+for col in ['month_sin', 'month_cos', 'FY', 'Season']:
+    df_wind[col] = monthly_target[col]
+df_wind['wind_speed_kph'] = monthly_station_mean(weather_hh, 'wind_speed_kph', cfg['wind_stations']).reindex(df_wind.index)
+df_wind['rh'] = monthly_station_mean(weather_hh, 'rh', cfg['wind_stations']).reindex(df_wind.index)
+df_wind['CF_lag12'] = df_wind['target'].shift(12)
+
+print(f"WIND: {len(df_wind)} monthly rows, FY{df_wind['FY'].min() % 100}-{df_wind['FY'].max() % 100}")
+display(df_wind.tail(3).round(3))
+```
+
+### 3.2 Retrain the models on FY23-26
+
+Every model of `WindCF_Analysis.qmd` is fitted again on all four years (FY23-26), with the same features and settings: Linear, Ridge, Random Forest, XGBoost, the Ensemble (mean of RF and XGBoost) and the Exponential baseline (CF as a function of TWAP). Seasonal Naive is not forecast, because it needs the CF of the same month one year earlier and that is only known for FY27.
+
+Table 3.1 gives the number of months each model was trained on and the Ridge alpha chosen on the larger sample. Fewer than 48 months means some months have a missing feature and were dropped.
+
+```{python}
+# =============================================================================
+# CELL 3.2 -- Wind: features and models retrained on all the history
+# FEATURES_WIND is the feature list of each model (EDIT HERE; keep it equal to WindCF_Analysis.qmd).
+# run_all_models fits on cfg['train_fys'] (FY23-26 here); its test scores are in-sample and not used.
+# =============================================================================
+
+FEATURES_WIND = {
+    'Linear':  ['wind_speed_kph', 'twap_neg', 'twap_pos', 'rh', 'month_sin', 'month_cos'],
+    'Ridge':   ['wind_speed_kph', 'twap_neg', 'twap_pos', 'rh', 'month_sin', 'month_cos'],
+    'RF':      ['wind_speed_kph', 'twap_neg', 'twap_pos', 'rh', 'month_sin', 'month_cos'],
+    'XGBoost': ['wind_speed_kph', 'twap_neg', 'twap_pos', 'rh', 'month_sin', 'month_cos'],
+}
+utilsModels.MODEL_FNS = {'Linear': run_linear, 'Ridge': run_ridge, 'RF': run_rf, 'XGBoost': run_xgb}
+MODEL_ORDER = ['Linear', 'Ridge', 'RF', 'XGBoost', 'Ensemble']      # Ensemble = mean of RF and XGBoost
+BASELINES = ['Exponential']
+
+_, fitted = run_all_models(df_wind, cfg, FEATURES_WIND)
+
+train_rows = df_wind[df_wind['FY'].isin(cfg['train_fys'])]
+fit_tbl = pd.DataFrame({m: {'months used': len(train_rows.dropna(subset=fitted[m]['feats'] + ['target'])),
+                            'features': len(fitted[m]['feats'])}
+                        for m in MODEL_ORDER if m != 'Ensemble'}).T
+ridge_model = fitted['Ridge']['model']
+table_title('Table 3.1 - Wind models retrained on FY23-26',
+            f'Ridge alpha = {ridge_model.alpha_:.2f}; Ensemble = mean of RF and XGBoost' if ridge_model is not None else None)
+display(fit_tbl)
+```
+
+### 3.3 Forecast FY27-29
+
+For every T source, every future month and every historical year, a feature row is built (the weather and price structure of that historical month, with the price re-targeted to `T` and the LGC shrink applied). Each model predicts a CF for each row. The forecast of a month is the **median** over the 4 historical years and the band is the min and max.
+
+`fc_agg` has one row per model, T source and month. The Exponential baseline does not use weather, so its band has zero width.
+
+```{python}
+# =============================================================================
+# CELL 3.3 -- Wind: scenario forecast FY27-29 for every model and T source
+#  build_forecast_table  one feature row per (future month, historical FY), price re-targeted to T
+#                        (utilsScenario.build_scenario_features)
+#  predict_any           prediction of a model or the Exponential baseline on such a table
+# Output: `fc_agg` (median, min, max CF per model, T source and month) with TWAP, FY and LGC.
+# =============================================================================
+
+
+def build_forecast_table(d, t_target):
+    """One feature row per (future month, historical FY).
+
+    Args:
+        d: Monthly feature table (df_wind).
+        t_target: Forecast TWAP per future month (Series indexed by month-end).
+
+    Meta columns start with '_' (_month, _fy, _T).
+    """
+    rows = []
+    for m_f in t_target.index:
+        for fy in SCENARIO_FYS:
+            cands = d.index[((d.index.month == m_f.month) & (d['FY'] == fy)).values]   # same calendar month in that FY
+            if len(cands) == 0:
+                continue
+            m_h = cands[0]
+            row = build_scenario_features(d, m_h, m_f, t_target[m_f], d.loc[m_h, 'neg_share'],
+                                          True, lgc_all, MODE, (a_lgc, b_lgc))
+            row.update({'_month': m_f, '_fy': fy, '_T': t_target[m_f]})
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def predict_any(method, tbl):
+    """Predict CF for the rows of a forecast table with a model or the Exponential baseline.
+
+    Exponential evaluates the fitted curve of the month's season at the row's TWAP (`_T`);
+    the Ensemble averages RF and XGBoost.
+    """
+    if method == 'Exponential':
+        seasons = tbl['_month'].map(future_cal['Season']).values
+        out = np.full(len(tbl), np.nan)
+        for season, p in fitted['Exponential']['model'].items():
+            mask = seasons == season
+            if mask.any() and not np.isnan(p['a']):
+                out[mask] = expfunctionCF(tbl.loc[mask, '_T'].values, p['a'], p['b'])
+        return out
+    if method == 'Ensemble':
+        return (predict_cf('RF', fitted['RF'], tbl) + predict_cf('XGBoost', fitted['XGBoost'], tbl)) / 2
+    return predict_cf(method, fitted[method], tbl)
+
+
+METHODS = [m for m in BASELINES + MODEL_ORDER if m in BASELINES or fitted[m]['model'] is not None or m == 'Ensemble']
+frames = []
+for src, t in T_BY_SOURCE.items():
+    tbl = build_forecast_table(df_wind, t)
+    for method in METHODS:
+        tmp = tbl[['_month', '_fy', '_T']].rename(columns={'_month': 'month', '_fy': 'scenario_fy', '_T': 'T'})
+        tmp['t_source'], tmp['method'], tmp['pred_cf'] = src, method, predict_any(method, tbl)
+        frames.append(tmp)
+forecast_df = pd.concat(frames, ignore_index=True)
+
+# Median over the historical years per month, with the min-max band
+fc_agg = forecast_df.groupby(['method', 't_source', 'month'], sort=False).agg(
+    CF_median=('pred_cf', 'median'), CF_lo=('pred_cf', 'min'), CF_hi=('pred_cf', 'max'), TWAP=('T', 'first')).reset_index()
+fc_agg['FY'] = fc_agg['month'].map(future_cal['FY'])
+fc_agg['LGC'] = fc_agg['month'].map(lgc_future)
+print(f'{len(forecast_df):,} predictions -> {len(fc_agg)} rows (models x T sources x months); '
+      f'{int(fc_agg["CF_median"].isna().sum())} rows without a forecast')
+```
+
+### 3.4 Results
+
+Table 3.2 is the annual mean CF of every model for each T source. Fig 3.1 shows the monthly CF history and the forecast of every model with the first T source (`T_MAIN`). Then, for each model in `MODELS_SHOW` (Ridge and XGBoost), the **full timeline** (actual CF and the forecast under each T source, with the min-max band over the historical years) is showed.
+
+In Fig 3.1 the models should follow the seasons of the history; a line that leaves the others needs an explanation. In the model figures the gap between the lines is the effect of the T source alone, since the weather scenarios are the same; the shaded band is the spread caused by the weather. The annual means in Table 3.2 give the size of the difference between models and between T sources.
+
+```{python}
+# =============================================================================
+# CELL 3.4 -- Wind: annual means and plots
+# MODELS_SHOW: the models that get their own figures (EDIT HERE).
+# =============================================================================
+
+MODELS_SHOW = ['Ridge', 'XGBoost']
+MODEL_COLOUR = {'Linear': '#4C72B0', 'Ridge': '#E67E22', 'RF': '#55A868', 'XGBoost': '#C44E52',
+                'Ensemble': '#8172B3', 'Exponential': '#999999'}
+SOURCE_COLOUR = {'forward': '#2980B9', 'ASX_Sep': '#E67E22', 'ASX_Aug': '#27AE60'}
+
+
+def month_start(index) -> pd.DatetimeIndex:
+    """Move month-end timestamps (e.g. 2022-07-31) to the 1st of the same month (2022-07-01)."""
+    return pd.DatetimeIndex(index).to_period('M').to_timestamp()
+
+
+# --- Table 3.2: annual mean CF ---
+annual = fc_agg.groupby(['t_source', 'method', 'FY'], sort=False)['CF_median'].mean().unstack('FY')
+annual = annual.rename(columns=fy_label)
+fwd = annual.loc[T_MAIN].drop(BASELINES)          # weather-driven models only
+spread = (fwd.max() - fwd.min()).max()
+table_title('Table 3.2 - Wind: annual mean CF by T source and model',
+            f'with T = {T_MAIN} the weather-driven models differ by at most {spread:.3f} in any year')
+display(annual.round(3))
+
+# --- Fig 3.1: history and forecast of every model (T = T_MAIN) ---
+hist = df_wind['target']
+fig, ax = plt.subplots(figsize=(14, 5.5))
+ax.plot(month_start(hist.index), hist.values, color='#391B56', lw=1.8, label='Actual CF (FY23-26)')
+for m in METHODS:
+    sub = fc_agg[(fc_agg['t_source'] == T_MAIN) & (fc_agg['method'] == m)].sort_values('month')
+    ax.plot(month_start(sub['month']), sub['CF_median'], color=MODEL_COLOUR[m], lw=1.5,
+            ls='--' if m in BASELINES else '-', label=m)
+ax.axvline(pd.Timestamp(f'{FORECAST_FYS[0] - 1}-07-01'), color='#999999', lw=0.8, ls=':')
+ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
+ax.set_ylabel('Wind contract factor')
+ax.legend(loc='upper left', ncol=4, frameon=False)
+fig.tight_layout()
+add_titles(fig, f'Fig 3.1 - Wind CF: history and forecast FY27-29 by model (T = {T_MAIN})',
+           'Mean forecast CF by year (average of the weather-driven models): '
+           + ', '.join(f'{fy} {v:.3f}' for fy, v in fwd.mean().items()))
+plt.show()
+
+# --- Model figures: one full timeline for each model in MODELS_SHOW ---
+
+
+def fy_separators(ax, first_fy, last_fy):
+    """Dotted line at 1 July of each financial year with its label ('FY27') at the top of the axes."""
+    for fy in range(first_fy, last_fy + 1):
+        x = pd.Timestamp(year=fy - 1, month=7, day=1)
+        ax.axvline(x, color='#999999', lw=0.7, ls=':', alpha=0.6)
+        ax.text(x + pd.Timedelta(days=5), 0.99, f'FY{fy % 100}', transform=ax.get_xaxis_transform(),
+                fontsize=8, color='#777777', va='top')
+
+
+def draw_sources(ax, method):
+    """Forecast of one model for each T source: median line and min-max band."""
+    for src in T_BY_SOURCE:
+        sub = fc_agg[(fc_agg['t_source'] == src) & (fc_agg['method'] == method)].sort_values('month')
+        x = month_start(sub['month'])
+        ax.fill_between(x, sub['CF_lo'], sub['CF_hi'], color=SOURCE_COLOUR[src], alpha=0.12, lw=0)
+        ax.plot(x, sub['CF_median'], color=SOURCE_COLOUR[src], lw=1.6, label=f'T = {src}')
+
+
+def plot_model(method, number):
+    """Two figures for one model: full timeline (actual + forecast) and a zoom on the forecast years."""
+    by_src = annual.xs(method, level='method')                       # annual mean CF: rows T source, columns FY
+    last_actual = df_wind.loc[df_wind['FY'] == cfg['train_fys'][-1], 'target'].mean()
+
+    # Full timeline: actual CF and the forecast under each T source
+    fig, ax = plt.subplots(figsize=(16, 5.5))
+    ax.plot(month_start(hist.index), hist.values, color='#391B56', lw=1.6, label='Actual CF (FY23-26)')
+    draw_sources(ax, method)
+    fy_separators(ax, cfg['train_fys'][0], FORECAST_FYS[-1])
+    ax.set_ylabel('Wind contract factor')
+    ax.legend(loc='upper center', ncol=len(USE_SOURCES) + 1, frameon=False, bbox_to_anchor=(0.5, -0.06))
+    fig.tight_layout()
+    add_titles(fig, f'Fig 3.{number} - Wind CF, {method}: actual FY23-26 and forecast FY27-29',
+               f'Mean CF: FY26 actual {last_actual:.2f}; forecast (T = {T_MAIN}) '
+               + ', '.join(f'{fy} {v:.2f}' for fy, v in by_src.loc[T_MAIN].items()))
+    plt.show()
+
+
+for number, method in enumerate(MODELS_SHOW, start=2):
+    plot_model(method, number)
+```
+
+### 3.5 Write the csv files
+
+One file per model in `data/forecast/` (`FY27-29_Linear.csv`, `_Ridge`, `_RF`, `_XGB`, `_Ensemble`, `_Exponential`). Each file has one row per T source and month, with the median CF, the band, the TWAP and the LGC price used. The rows of this part have `asset_type = WIND`; the solar rows already in a file are kept.
+
+Table 3.3 lists the files. `months without forecast` is the number of rows where no historical year gave a prediction (a month with no negative price in all four years); it should be 0.
+
+```{python}
+# =============================================================================
+# CELL 3.5 -- Wind: write the forecast of every model to data/forecast/FY27-29_<Model>.csv
+# =============================================================================
+
+wind_log = write_forecast(fc_agg, 'WIND', FORECAST_FYS, cfg['forecast_dir'])
+n_missing = int(wind_log['months without forecast'].sum())
+table_title('Table 3.3 - Files written', f'{len(wind_log)} files in data/forecast/; {n_missing} rows without a forecast in total')
+display(wind_log)
+```

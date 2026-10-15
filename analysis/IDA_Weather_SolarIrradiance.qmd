@@ -1,0 +1,506 @@
+---
+title: "Initial data analysis: weather and solar irradiance"
+jupyter: python3
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    code-fold: true          # code is collapsed under a "Code" toggle
+    code-overflow: wrap
+    embed-resources: true
+    grid:
+      body-width: 1100px   # wider text column so the large figures stay readable
+      margin-width: 250px
+    include-in-header:
+      text: |
+        <style>
+        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
+        .cell-output-display img { max-width: 100%; height: auto; }
+        </style>
+---
+
+**Goal.** Before any weather variable is used, check that the two weather sources can be trusted and decide which **stations** and which **variables** go into the next steps (`Wind_QuantileMapping.qmd`, `SolarProxy_Cal.qmd`, `EDA.qmd` and the models).
+
+**Sources.** DTN weather (temperature, dew point, humidity, wind speed, gust, direction, rainfall, pressure and more) and Solcast solar irradiance (GHI, DNI, air temperature), each for stations 85280, 86338 and 89002, every 30 minutes. Every numeric variable of the two files is read and checked.
+
+**Flow**
+
+1. Set-up: load the raw files and the generation, with no interpolation so that gaps stay visible
+2. Which stations: correlation of each station with the generation
+3. The corrupted wind speed: the known problem of the DTN wind speed, corrected in the next files
+4. Data quality: missing data in every variable
+5. Which variables: the variables kept for the next steps
+
+**Output:** nothing is saved. The stations and variables chosen here are the ones to use in the next files (`wind_stations` and `solar_stations` in their `cfg`).
+
+## 1. Set-up
+
+The raw weather files are read as they are (no interpolation), with every numeric variable, on a complete 30-minute grid, so a missing half-hour shows up as a missing value. Text columns (for example the compass direction) are not read. The generation (MWh per half-hour, scaled by MLF and contracted share) comes from `utilsData`; commissioning and exclusion periods are already blank (NaN) there.
+
+```{python}
+# =============================================================================
+# CELL 1.1 -- Imports, configuration and loading
+#   dtn  DTN weather per station:        every numeric variable, as <variable>_<station>
+#   sol  Solcast irradiance per station: every numeric variable, as <variable>_<station>
+#   wx   dtn and sol side by side;  gen  half-hourly generation of every asset (MWh)
+# =============================================================================
+
+import os, sys, warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.transforms import ScaledTranslation
+from matplotlib.colors import LinearSegmentedColormap
+from IPython.display import display, Markdown
+
+warnings.filterwarnings('ignore')
+
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
+
+from utilsData import load_generation_inputs, _to_naive_timestamp
+
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
+
+cfg = {
+    'analysis_start': '2022-07-01 00:00:00',
+    'analysis_end': '2026-06-30 23:30:00',
+    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
+    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
+    'station_ids': [85280, 86338, 89002],
+    'wind_stations': [86338, 89002],                     # chosen in section 2: DTN stations averaged for wind
+    'solar_stations': [85280, 86338, 89002],             # chosen in section 2: Solcast stations averaged for solar
+    'corruption_window': ('2025-10-07', '2026-04-14'),   # DTN wind speed is squashed here (found in Wind_QuantileMapping.qmd)
+    'weather_interp_limit': 2,                           # the models' loader interpolates gaps of up to 2 half-hours
+}
+STATIONS = cfg['station_ids']
+all_assets = cfg['wind_assets'] + cfg['solar_assets']
+START, END = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
+GRID = pd.date_range(START, END, freq='30min')           # every half-hour that should exist
+
+
+def load_raw_station_file(path, station_col, time_col):
+    """Read a raw 30-minute weather file with every numeric variable, with no interpolation.
+
+    Text columns (and the time columns) are not read as variables.
+    Returns:
+        wide: DataFrame on GRID with columns '<variable>_<station>' (NaN where a half-hour is missing).
+        stats: DataFrame by station with the rows read, duplicated timestamps and timestamps off the 30-minute grid.
+        variables: list of the numeric variables found in the file.
+    """
+    raw = pd.read_csv(path).rename(columns={station_col: 'station', time_col: 'ts'})
+    raw['ts'] = _to_naive_timestamp(raw['ts'])
+    raw['station'] = pd.to_numeric(raw['station'], errors='coerce')
+    others = [c for c in raw.columns if c not in ('station', 'ts')]
+    numeric = raw[others].apply(pd.to_numeric, errors='coerce')                 # text becomes NaN
+    variables = [c for c in others if numeric[c].notna().any()]                 # numeric columns only
+    print(f'{os.path.basename(path)}: {len(variables)} numeric variables; not read: {[c for c in others if c not in variables]}')
+    raw[variables] = numeric[variables]
+    raw = raw[raw['station'].isin(STATIONS) & raw['ts'].between(START, END)]
+    by_station = raw['station']
+    stats = pd.DataFrame({'rows': raw.groupby('station').size(),
+                          'duplicated timestamps': raw.duplicated(['station', 'ts']).groupby(by_station).sum(),
+                          'off the 30-min grid': (~raw['ts'].isin(GRID)).groupby(by_station).sum()})
+    wide = (raw.drop_duplicates(['station', 'ts'], keep='last')
+               .pivot(index='ts', columns='station', values=variables).reindex(GRID))
+    wide.columns = [f'{v}_{s}' for v, s in wide.columns]
+    return wide, stats, variables
+
+
+dtn, dtn_stats, DTN_VARS = load_raw_station_file(os.path.join(DATA_DIR, 'raw', 'HistoricWeather_30min.csv'),
+                                                 'related_location', 'obs_time_local')
+sol, sol_stats, SOL_VARS = load_raw_station_file(os.path.join(DATA_DIR, 'raw', 'HistoricSolarIrradiance_30min.csv'),
+                                                 'station_number', 'timestamp_local')
+wx = dtn.join(sol)
+
+gen_scaled, _, capacity = load_generation_inputs(cfg, DATA_DIR)
+gen = gen_scaled[all_assets].reindex(GRID)
+wind_gen = gen[cfg['wind_assets']].sum(axis=1, min_count=1)      # wind portfolio, MWh per half-hour
+solar_gen = gen[cfg['solar_assets']].sum(axis=1, min_count=1)    # solar portfolio
+
+# Half-hours inside the corrupted window (the end day is included)
+w0, w1 = (pd.Timestamp(d) for d in cfg['corruption_window'])
+in_window = pd.Series((GRID >= w0) & (GRID < w1 + pd.Timedelta(days=1)), index=GRID)
+daytime = wx[[f'ghi_{s}' for s in STATIONS]].max(axis=1) > 5     # some station sees the sun (GHI above 5 W/m2)
+
+print(f'\nGrid: {len(GRID):,} half-hours, {START:%Y-%m-%d} -> {END:%Y-%m-%d}')
+print(f'Weather columns: {wx.shape[1]} ({len(DTN_VARS)} DTN + {len(SOL_VARS)} Solcast variables x {len(STATIONS)} stations)')
+```
+
+```{python}
+# =============================================================================
+# CELL 1.2 -- Plot style and table helpers
+#   add_titles, table_title  figure title + insight subtitle, table caption
+# Colours: purple and orange, as in the other files.
+# =============================================================================
+
+GREY = '#888888'
+PURPLE, ORANGE = '#391B56', '#E67E22'
+HEAT = LinearSegmentedColormap.from_list('purple', ['#F3EEF8', PURPLE])             # 0 (light) -> 1 (purple)
+DIVERGING = LinearSegmentedColormap.from_list('orange_purple', [ORANGE, 'white', PURPLE])   # -1 -> +1
+MISSING = LinearSegmentedColormap.from_list('missing', ['white', ORANGE])           # 0% (white) -> more missing (orange)
+
+plt.rcParams.update({'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
+                     'axes.spines.top': False, 'axes.spines.right': False})
+
+
+def add_titles(fig, title, subtitle=None):
+    """Bold figure title with an optional one-line insight (subtitle) below it.
+
+    Call after fig.tight_layout(); the text is placed just above the top of the figure.
+    """
+    def put(text, offset_pt, **kw):
+        shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
+        fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
+    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
+    if subtitle:
+        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+
+
+def table_title(title, note=None):
+    """Print a bold table caption (and an optional italic note) above display(df)."""
+    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
+
+
+def heatmap(ax, table, cmap, vmin, vmax, fontsize=9):
+    """Annotated heatmap of a small table."""
+    ax.imshow(table.values, cmap=cmap, vmin=vmin, vmax=vmax, aspect='auto')
+    ax.set_xticks(range(table.shape[1])); ax.set_xticklabels(table.columns)
+    ax.set_yticks(range(table.shape[0])); ax.set_yticklabels(table.index)
+    ax.grid(False)
+    for i in range(table.shape[0]):
+        for j in range(table.shape[1]):
+            v = table.values[i, j]
+            if np.isfinite(v):
+                dark = abs(v - (vmin + vmax) / 2) > (vmax - vmin) * 0.2
+                ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=fontsize, color='white' if dark else '#222222')
+```
+
+## 2. Which stations
+
+Each asset is compared with the weather of each station, half-hour by half-hour (Pearson correlation). Table 2.1 is wind speed against the generation of each wind farm and of the wind portfolio, using every half-hour with generation (the corrupted wind speed is looked at in section 3). Table 2.2 is GHI against the generation of each solar farm and of the solar portfolio, using daytime half-hours only (GHI above 5 W/m²), so that the night does not inflate the correlation. Fig 2.1 shows the same numbers as heatmaps.
+
+A higher number is a stronger link between the station and the generation. What matters is the gap between the stations: if one station is clearly lower it is not worth using, and if several stations are close to each other they carry similar information.
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- Correlation of each asset with each station (wind speed for wind, GHI for solar)
+# Pearson correlation on half-hours where both values exist; wind uses every half-hour,
+# solar uses daytime half-hours only. The portfolio row uses the summed generation.
+# The chosen stations are set in cfg (wind_stations, solar_stations); the checks below confirm the choice.
+# =============================================================================
+
+def station_corr(targets, var, mask):
+    """Correlation of each generation series in `targets` (dict name -> Series) with `var` at every station."""
+    out = {}
+    for name, g in targets.items():
+        row = {}
+        for s in STATIONS:
+            x = wx[f'{var}_{s}']
+            ok = mask & x.notna() & g.notna()
+            row[s] = x[ok].corr(g[ok])
+        out[name] = row
+    return pd.DataFrame(out).T
+
+
+wind_targets = {a: gen[a] for a in cfg['wind_assets']} | {'WIND portfolio': wind_gen}
+solar_targets = {a: gen[a] for a in cfg['solar_assets']} | {'SOLAR portfolio': solar_gen}
+corr_wind = station_corr(wind_targets, 'wind_speed_kph', pd.Series(True, index=GRID))
+corr_solar = station_corr(solar_targets, 'ghi', daytime)
+
+SEL_WIND, SEL_SOLAR = cfg['wind_stations'], cfg['solar_stations']
+wind_port, solar_port = corr_wind.loc['WIND portfolio'], corr_solar.loc['SOLAR portfolio']
+top_wind = sorted(wind_port.sort_values(ascending=False).index[:2])        # the two highest stations for wind
+solar_spread = solar_port.max() - solar_port.min()                         # gap between the best and worst solar station
+
+table_title('Table 2.1 - Wind: correlation of wind speed with the generation of each farm',
+            f'Half-hourly, all half-hours with generation; highest for the portfolio: stations {top_wind[0]} and {top_wind[1]}')
+display(corr_wind.round(3))
+table_title('Table 2.2 - Solar: correlation of GHI with the generation of each farm',
+            f'Half-hourly, daytime only; the three stations are within {solar_spread:.2f} of each other for the portfolio')
+display(corr_solar.round(3))
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 3.8))
+heatmap(axes[0], corr_wind, HEAT, 0, 1)
+axes[0].set_title('Wind speed vs wind generation', loc='left', fontsize=10)
+heatmap(axes[1], corr_solar, HEAT, 0, 1)
+axes[1].set_title('GHI vs solar generation', loc='left', fontsize=10)
+for ax in axes:
+    ax.set_xlabel('Station')
+fig.tight_layout()
+add_titles(fig, 'Fig 2.1 - Correlation of each asset with each weather station',
+           f'Wind: stations {top_wind[0]} and {top_wind[1]} are the highest ({wind_port[top_wind[0]]:.2f} and {wind_port[top_wind[1]]:.2f}); '
+           f'solar: the three stations are close ({solar_port.min():.2f} to {solar_port.max():.2f})')
+plt.show()
+
+if sorted(SEL_WIND) != top_wind:
+    print(f'WARNING: cfg wind_stations {SEL_WIND} are not the two highest stations {top_wind}')
+print(f'Wind stations (averaged): {SEL_WIND}   |   solar stations (averaged): {SEL_SOLAR}')
+```
+
+**Wind.** Stations 86338 and 89002 have the highest correlation and are close to each other, so both are used and their wind variables are averaged. Station 85280 is clearly lower and is not used for wind.
+
+**Solar.** The three stations have similar correlations, so the solar variables are averaged over the three stations.
+
+## 3. The corrupted wind speed
+
+One figure, one panel per chosen wind station (86338 and 89002). The purple line is the monthly mean wind speed with the range seen in the same calendar month before the corruption (purple band). The orange line is the generation of the wind portfolio (MWh per half-hour, monthly mean) on a second axis. The grey area is the corrupted window found in `Wind_QuantileMapping.qmd`.
+
+If the purple line drops out of its band inside the grey area while the orange line stays at its usual level, the farms produced as usual but the sensor reports calm weather: the weather data is wrong. Generation of the portfolio also depends on which farms were running, so compare it with the same months of other years.
+
+**Consequence.** The wind speed of these two stations has to be corrected before it is used. This is done in the next files, for the two stations (quantile mapping, `Wind_QuantileMapping.qmd`).
+
+```{python}
+# =============================================================================
+# CELL 3.1 -- Measured wind speed vs wind generation, per chosen DTN wind station
+# ratio = mean in the months fully inside the corrupted window / mean of the same calendar months before it.
+# A station is flagged when its wind speed ratio is below 0.8 while generation stays above 0.8.
+# =============================================================================
+
+CORRUPT_STATIONS = cfg['wind_stations']                   # the two DTN stations chosen for wind
+ws_ms = {s: dtn[f'wind_speed_kph_{s}'] / 3.6 for s in CORRUPT_STATIONS}     # km/h -> m/s
+gen_m = wind_gen.resample('MS').mean()                    # monthly mean, month-start index
+
+m_idx = gen_m.index
+inside = (m_idx >= w0) & (m_idx + pd.offsets.MonthEnd(0) <= w1)     # months fully inside the window
+before = m_idx < w0.replace(day=1)                                   # months before the window
+
+
+def usual_ratio(monthly):
+    """Mean of the months inside the window / mean of the same calendar months before the window."""
+    ref = monthly[before & np.isin(m_idx.month, m_idx[inside].month)]
+    return monthly[inside].mean() / ref.mean()
+
+
+fig, axes = plt.subplots(len(CORRUPT_STATIONS), 1, figsize=(14, 7), sharex=True)
+ratios = {}
+for ax, s in zip(axes, CORRUPT_STATIONS):
+    ws_m = ws_ms[s].resample('MS').mean()
+    ref = ws_m[before]
+    band = ref.groupby(ref.index.month).agg(['min', 'max'])          # range of each calendar month before the window
+    lo, hi = band['min'].reindex(m_idx.month).values, band['max'].reindex(m_idx.month).values
+    ratios[s] = (usual_ratio(ws_m), usual_ratio(gen_m))
+
+    ax.fill_between(m_idx, lo, hi, color=PURPLE, alpha=0.15, label='Wind speed, range of the same month before the window')
+    ax.plot(ws_m, '-o', color=PURPLE, ms=3, label='Mean wind speed (m/s)')
+    ax.axvspan(w0, w1, color=GREY, alpha=0.18, label='Corrupted window')
+    ax.set_ylabel('Wind speed (m/s)')
+    ax.set_title(f'Station {s}', loc='left', fontsize=10)
+    ax2 = ax.twinx()
+    ax2.plot(gen_m, color=ORANGE, lw=1.8, label='Wind portfolio generation (MWh per half-hour)')
+    ax2.set_ylabel('Generation (MWh)')
+    ax2.grid(False)
+    ax2.spines[['top']].set_visible(False)
+
+handles, labels = [], []
+for h, l in zip(*axes[0].get_legend_handles_labels()):
+    handles.append(h); labels.append(l)
+h2, l2 = ax2.get_legend_handles_labels()
+fig.tight_layout(rect=(0, 0.06, 1, 1))
+fig.legend(handles + h2, labels + l2, loc='lower center', ncol=2, frameon=False, fontsize=9)
+gen_ratio = ratios[CORRUPT_STATIONS[0]][1]
+add_titles(fig, 'Fig 3.1 - Measured wind speed vs wind generation',
+           ' and '.join(f'station {s} reads {ratios[s][0]:.0%}' for s in CORRUPT_STATIONS).capitalize()
+           + f' of its usual wind speed in the window, while generation is {gen_ratio:.0%} of its usual level')
+plt.show()
+
+flagged = [s for s in CORRUPT_STATIONS if ratios[s][0] < 0.8 and ratios[s][1] >= 0.8]
+print(f'Stations with corrupted wind speed: {flagged if flagged else "none"}')
+```
+
+## 4. Data quality
+
+Only missing data is checked: missing half-hours and gaps that are too long to repair are what matters for the models. Every numeric variable of both files is covered.
+
+Table 4.1 counts the rows read for each station against the rows that should exist, duplicated timestamps and timestamps that are not on the 30-minute grid. Table 4.2 gives, for every variable and station, the share of missing half-hours (including half-hours absent from the file), the longest gap and the number of gaps longer than 2 half-hours, which the loader of the models cannot repair by interpolation. Fig 4.1 shows the share of missing half-hours in each month for every variable (worst of the three stations).
+
+**How to read.** Duplicates and off-grid timestamps should be 0. A short gap is harmless because it is interpolated; a variable that is missing most of the time cannot be used at all. In Fig 4.1 white is complete and orange is missing (the scale stops at 20%).
+
+```{python}
+# =============================================================================
+# CELL 4.1 -- Timestamps, missing values and gaps
+# Missing = NaN on the complete 30-minute grid (a half-hour absent from the file is also NaN).
+# A gap is a run of consecutive missing half-hours. MISSING_MAX is the share of missing half-hours above which
+# a variable is called mostly missing (used again in section 5).
+# =============================================================================
+INTERP_LIMIT = cfg['weather_interp_limit']
+MISSING_MAX = 0.5
+VARS = DTN_VARS + SOL_VARS
+
+
+def gap_stats(s):
+    """Number of gaps, longest gap (half-hours) and number of gaps longer than the interpolation limit."""
+    miss = s.isna()
+    run_id = (miss != miss.shift()).cumsum()
+    lengths = miss.groupby(run_id).agg(['first', 'size'])
+    lengths = lengths[lengths['first']]['size']
+    return len(lengths), int(lengths.max()) if len(lengths) else 0, int((lengths > INTERP_LIMIT).sum())
+
+
+# ── Table 4.1: timestamps ──
+ts = pd.concat({'DTN weather': dtn_stats, 'Solcast irradiance': sol_stats}, names=['source', 'station'])
+ts.insert(1, 'expected rows', len(GRID))
+ts['rows missing from the file'] = (ts['expected rows'] - (ts['rows'] - ts['duplicated timestamps'] - ts['off the 30-min grid'])).clip(lower=0)
+table_title('Table 4.1 - Timestamps by source and station',
+            f"{len(GRID):,} half-hours expected per station; {int(ts['duplicated timestamps'].sum())} duplicated, "
+            f"{int(ts['off the 30-min grid'].sum())} off the grid, {int(ts['rows missing from the file'].sum())} absent from the files in total")
+display(ts)
+
+# ── Table 4.2: missing values and gaps, one row per variable, one column per station ──
+rows = []
+for var in VARS:
+    for s in STATIONS:
+        x = wx[f'{var}_{s}']
+        n_gaps, longest, n_long = gap_stats(x)
+        rows.append({'variable': var, 'station': s, 'missing %': x.isna().mean() * 100,
+                     'longest gap': longest, f'gaps > {INTERP_LIMIT}': n_long})
+miss_long = pd.DataFrame(rows)
+metrics = ['missing %', 'longest gap', f'gaps > {INTERP_LIMIT}']
+miss_tbl = pd.concat({m: miss_long.pivot(index='variable', columns='station', values=m).reindex(VARS) for m in metrics}, axis=1)
+mostly_missing = list(miss_tbl.index[(miss_tbl['missing %'] > MISSING_MAX * 100).all(axis=1)])
+table_title('Table 4.2 - Missing values and gaps by variable and station',
+            f"gap lengths in half-hours; {len(mostly_missing)} variable(s) missing in more than {MISSING_MAX:.0%} of the half-hours: "
+            f"{', '.join(mostly_missing) or 'none'}; {int(miss_tbl[f'gaps > {INTERP_LIMIT}'].sum().sum())} gaps longer than {INTERP_LIMIT} half-hours elsewhere")
+display(miss_tbl.round(2))
+
+# ── Fig 4.1: share missing per month, every variable (worst of the three stations) ──
+by_month = {}
+for var in VARS:
+    cols = wx[[f'{var}_{s}' for s in STATIONS]]
+    by_month[var] = cols.isna().groupby(cols.index.to_period('M')).mean().max(axis=1) * 100
+miss_month = pd.DataFrame(by_month).T
+usable = [v for v in VARS if v not in mostly_missing]               # the subtitle ignores the mostly missing variables
+fig, ax = plt.subplots(figsize=(14, 0.3 * len(VARS) + 1.6))
+im = ax.imshow(miss_month.values, cmap=MISSING, vmin=0, vmax=20, aspect='auto')
+ax.set_yticks(range(len(miss_month))); ax.set_yticklabels(miss_month.index, fontsize=8)
+ticks = range(0, miss_month.shape[1], 3)
+ax.set_xticks(list(ticks)); ax.set_xticklabels([str(miss_month.columns[i]) for i in ticks], rotation=45, fontsize=8)
+ax.grid(False)
+fig.colorbar(im, ax=ax, label='% of half-hours missing (worst station)', pad=0.01)
+fig.tight_layout()
+n_bad = int((miss_month.loc[usable] > 1).sum().sum())
+worst = miss_month.loc[usable].stack().idxmax()
+add_titles(fig, 'Fig 4.1 - Share of missing half-hours by month and variable',
+           f'Usable variables: {n_bad} variable-months have more than 1% missing; worst: {worst[0]} in {worst[1]} '
+           f'({miss_month.loc[usable].stack().max():.0f}%)')
+plt.show()
+```
+
+## 5. Which variables
+
+The variables kept for the next steps. 
+
+**Wind**: `wind_speed_kph`, `temp_c`, `rh`, `dp_c` and `rainfall_mm`, averaged over the two wind stations. 
+
+**Solar**: `ghi` and `air_temp_c`, averaged over the three solar stations. 
+
+Every other variable is dropped, and Tables 5.1 and 5.2 give the reason. Each variable is compared with the portfolio generation (wind variables with the wind portfolio, corrupted window left out; solar variables with the solar portfolio, daytime only) in two ways: half-hourly, and monthly, because the models work with monthly averages and seasons matter there. Wind direction enters as sine and cosine, since 359° and 1° are close.
+
+**How to read.** A dropped variable is mostly missing (Table 4.2), repeats a kept variable (|r| of 0.9 or more between the two, which is also what a unit copy such as knots instead of km/h looks like), or has a weak link with the generation. A reason starting with `review` means the variable is none of these, so the choice to drop it needs a second look. Fig 5.1 shows the correlation between the usable variables themselves (orange = negative, purple = positive): a purple pair close to 1 repeats the same information.
+
+```{python}
+# =============================================================================
+# CELL 5.1 -- Variables kept for the next steps, and why the others are dropped
+# EDIT the two lists WIND_KEEP and SOLAR_KEEP to change the variables.
+# R_DUP: correlation above which a dropped variable is called a copy of a kept one;
+# R_WEAK: strongest |r| below which a link with the generation is called weak (both only used to explain the drops).
+# =============================================================================
+WIND_KEEP = ['wind_speed_kph', 'temp_c', 'rh', 'dp_c', 'rainfall_mm']
+SOLAR_KEEP = ['ghi', 'air_temp_c']
+R_DUP, R_WEAK = 0.9, 0.2
+WHY = {'wind_speed_kph': 'Main driver of wind output',
+       'temp_c': 'Related to air density and the seasonal cycle',
+       'rh': 'Humid air is less dense, so wind carries slightly less power at the same wind speed',
+       'dp_c': 'Direct measure of air moisture (unlike RH, it does not change with temperature)',
+       'rainfall_mm': 'Rainy weather systems such as fronts and storms are often windy',
+       'ghi': 'Sunlight on a flat surface: the main driver of solar output',
+       'air_temp_c': 'Solar panels lose efficiency when the air is hot'}
+# Short reason for dropping a variable that is usable but not selected (the correlations are added automatically)
+DROP_NOTE = {'dni': 'Sunlight straight from the sun; it is already part of GHI, so it adds almost nothing once GHI is kept',
+             'wind_dir_sin': 'Direction (east-west part): tells where the wind comes from, not how strong it is, and the farms are in different places',
+             'wind_dir_cos': 'Direction (north-south part): tells where the wind comes from, not how strong it is, and the farms are in different places'}
+
+
+def average_over(stations, var):
+    """Mean of one variable over the chosen stations, half-hour by half-hour."""
+    return wx[[f'{var}_{s}' for s in stations]].mean(axis=1)
+
+
+def rate_variables(X, target, mask, keep):
+    """Correlation of each column of X with `target` (half-hourly and monthly), and the kept / dropped decision.
+
+    Variables in `keep` are kept; the others are dropped with a reason (written in DROP_NOTE, or computed from the data):
+    mostly missing, copy of a kept variable, weak link, or a moderate link that is simply not selected.
+    Returns the table (kept variables first, then the rest by strength) and the correlation matrix of the variables.
+    """
+    missing = [k for k in keep if k not in X.columns]
+    assert not missing, f'kept variable(s) {missing} are not in the data'
+    ok = mask & target.notna()
+    r_hh = X[ok].apply(lambda c: c.corr(target[ok]))
+    Xm, tm = X.where(mask).resample('MS').mean(), target.where(mask).resample('MS').mean()
+    r_month = Xm.apply(lambda c: c.corr(tm))
+    cc = X[ok].corr()
+    miss = X.isna().mean()
+    strength = pd.concat([r_hh.abs(), r_month.abs()], axis=1).max(axis=1)
+    decision, reason = {}, {}
+    for v in X.columns:
+        copies = [k for k in keep if k != v and abs(cc.loc[v, k]) >= R_DUP]
+        if v in keep:
+            decision[v], reason[v] = 'keep', WHY.get(v, '')
+        elif miss[v] > MISSING_MAX:
+            decision[v], reason[v] = 'drop', f'mostly missing ({miss[v]:.0%} of the half-hours)'
+        elif v in DROP_NOTE:                                       # written by hand, numbers added from the data
+            k = cc.loc[v, keep].abs().fillna(0).idxmax()           # kept variable most similar to this one
+            decision[v], reason[v] = 'drop', (f'{DROP_NOTE[v]} (|r| with {k} = {abs(cc.loc[v, k]):.2f}; '
+                                              f'strongest |r| with the generation = {strength[v]:.2f})')
+        elif copies:
+            decision[v], reason[v] = 'drop', f'repeats {copies[0]} (|r| = {abs(cc.loc[v, copies[0]]):.2f})'
+        elif strength[v] < R_WEAK:
+            decision[v], reason[v] = 'drop', f'weak link with the generation (strongest |r| = {strength[v]:.2f})'
+        else:
+            decision[v], reason[v] = 'drop', f'moderate link with the generation (strongest |r| = {strength[v]:.2f}), not selected'
+    tbl = pd.DataFrame({'r half-hourly': r_hh, 'r monthly': r_month, 'missing %': miss * 100,
+                        'decision': pd.Series(decision), 'reason': pd.Series(reason)})
+    order = list(keep) + list(strength.drop(keep).sort_values(ascending=False).index)
+    return tbl.loc[order], cc
+
+
+# Wind variables: every DTN variable averaged over the wind stations; wind direction as sine and cosine
+wind_X = pd.DataFrame({v: average_over(SEL_WIND, v) for v in DTN_VARS if v != 'wind_dir_degrees'})
+if 'wind_dir_degrees' in DTN_VARS:
+    rad = np.deg2rad(wx[[f'wind_dir_degrees_{s}' for s in SEL_WIND]])
+    wind_X['wind_dir_sin'], wind_X['wind_dir_cos'] = np.sin(rad).mean(axis=1), np.cos(rad).mean(axis=1)
+solar_X = pd.DataFrame({v: average_over(SEL_SOLAR, v) for v in SOL_VARS})
+wind_rate, wind_cc = rate_variables(wind_X, wind_gen, ~in_window, WIND_KEEP)
+solar_rate, solar_cc = rate_variables(solar_X, solar_gen, daytime, SOLAR_KEEP)
+
+with pd.option_context('display.max_colwidth', None):
+    table_title(f'Table 5.1 - Wind variables (stations {", ".join(map(str, SEL_WIND))} averaged) vs wind portfolio generation',
+                f'Corrupted window excluded; kept variables first; {int((wind_rate["decision"] == "keep").sum())} kept, '
+                f'{int((wind_rate["decision"] == "drop").sum())} dropped')
+    display(wind_rate.round(3))
+    table_title(f'Table 5.2 - Solar variables (stations {", ".join(map(str, SEL_SOLAR))} averaged) vs solar portfolio generation',
+                f'Daytime only; kept variables first; {int((solar_rate["decision"] == "keep").sum())} kept, '
+                f'{int((solar_rate["decision"] == "drop").sum())} dropped')
+    display(solar_rate.round(3))
+
+# Correlation between the usable variables (the mostly missing ones carry no information)
+use_w = [v for v in wind_X.columns if wind_rate.loc[v, 'missing %'] <= MISSING_MAX * 100]
+use_s = [v for v in solar_X.columns if solar_rate.loc[v, 'missing %'] <= MISSING_MAX * 100]
+fig, axes = plt.subplots(1, 2, figsize=(17, 6.5), gridspec_kw={'width_ratios': [3.2, 1]})
+heatmap(axes[0], wind_cc.loc[use_w, use_w], DIVERGING, -1, 1, fontsize=6.5)
+axes[0].set_title('Wind variables', loc='left', fontsize=10)
+heatmap(axes[1], solar_cc.loc[use_s, use_s], DIVERGING, -1, 1)
+axes[1].set_title('Solar variables', loc='left', fontsize=10)
+for ax in axes:
+    ax.tick_params(axis='x', rotation=45, labelsize=8)
+fig.tight_layout()
+add_titles(fig, 'Fig 5.1 - Correlation between the weather variables',
+           f'Wind: keep {", ".join(WIND_KEEP)}; solar: keep {", ".join(SOLAR_KEEP)}')
+plt.show()
+```

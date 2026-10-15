@@ -22,7 +22,7 @@ format:
 
 **Goal.** Look at the data before modelling: how contract factor (CF) moves with price and weather, what a price-only baseline can do, and how the LGC (certificate) price links to negative prices.
 
-**Why LGC here.** Future scenarios reuse the *price structure* of past years. Back then negative prices were deeper because the LGC was expensive (renewables bid down to roughly -LGC, since each MWh still earns a certificate). The LGC has since dropped, so negative prices get shallower. Without an adjustment the zero-dollar-floor benefit in CF is overstated and the forecast CF is too high. Section 5 checks this link and defines the shrink factor used by the forecast files.
+**Why LGC here.** Future scenarios reuse the *price structure* of past years. Back then negative prices were deeper because the LGC was expensive (renewables bid down to roughly -LGC, since each MWh still earns a certificate). The LGC has since dropped, so negative prices get shallower. Without an adjustment the zero-dollar-floor benefit in CF is overstated and the forecast CF is too high. Section 4 checks this link and defines the shrink factor used by the forecast files.
 
 **Flow**
 

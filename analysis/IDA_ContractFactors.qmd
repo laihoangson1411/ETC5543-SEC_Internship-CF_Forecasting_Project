@@ -164,15 +164,20 @@ Monthly price (TWAP) with the contract factor of the wind and solar portfolios. 
 # CELL 3.1 -- Monthly price and portfolio contract factors
 # =============================================================================
 
-fy_starts = pd.date_range(cf_monthly.index.min(), cf_monthly.index.max(), freq='YS-JUL')
+# Plot copy with the index moved from month-end (2022-07-31) to month-start (2022-07-01),
+# so the first point sits on July and lines up with the financial-year gridlines
+cf_plot = cf_monthly.copy()
+cf_plot.index = cf_plot.index.to_period('M').to_timestamp()
+
+fy_starts = pd.date_range(cf_plot.index.min(), cf_plot.index.max(), freq='YS-JUL')
 
 fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
-axes[0].plot(cf_monthly['VIC1Price_TWAP'], color=GREY, lw=1.6)
+axes[0].plot(cf_plot['VIC1Price_TWAP'], color=GREY, lw=1.6)
 axes[0].set_ylabel('VIC1 TWAP (\\$/MWh)')
 axes[0].set_title('Monthly average price', loc='left', fontsize=10)
 
 for ax, p in zip(axes[1:], portfolios):
-    ax.plot(cf_monthly[f'{p}_ContractFactor'], color=COLOR[p], lw=1.8)
+    ax.plot(cf_plot[f'{p}_ContractFactor'], color=COLOR[p], lw=1.8)
     ax.axhline(1, color='black', lw=0.7, ls=':')
     ax.set_ylabel('Contract factor')
     ax.set_title(f'{p.title()} portfolio', loc='left', fontsize=10)
@@ -202,7 +207,7 @@ One line per asset. Assets of the same type should move together (same weather, 
 fig, axes = plt.subplots(1, 2, figsize=(15, 4.5), sharex=True)
 for ax, (gname, assets) in zip(axes, [('Wind', cfg['wind_assets']), ('Solar', cfg['solar_assets'])]):
     for a in assets:
-        ax.plot(cf_monthly[f'{a}_ContractFactor'], color=COLOR[a], lw=1.6, label=a)
+        ax.plot(cf_plot[f'{a}_ContractFactor'], color=COLOR[a], lw=1.6, label=a)   # month-start index from cell 3.1
     ax.set_title(f'{gname} assets', loc='left', fontsize=10)
     ax.set_ylabel('Contract factor')
     ax.legend(loc='upper right', frameon=False, fontsize=8, ncol=len(assets))
@@ -244,8 +249,6 @@ add_check(f'Months with contract factor outside {list(CF_BOUNDS)}', range_tbl['o
 ```
 
 ## 5. Data quality
-
-`OK` means no problem, `CHECK` means something should be looked at, and `INFO` means the result is expected (for example months before an asset started). Section 5.5 collects all checks in one table.
 
 ### 5.1 Half-hourly input
 
@@ -302,13 +305,13 @@ add_check('Missing half-hours (commissioning and exclusion periods)', gen_tbl['m
 
 ### 5.2 Exclusion periods and availability
 
-**What.** One bar per asset (wind on top, solar below) over the analysis window, from `ExclusionPeriods.csv`:
+One bar per asset (wind on top, solar below) over the analysis window, from `ExclusionPeriods.csv`:
 
 - **green**: the asset is available,
 - **light grey**: not yet online, or commissioning,
 - **gold / orange / red**: an exclusion period shorter than 14 days / 14-90 days / longer than 90 days (the longer ones show their length in days).
 
-**How to read.** These are the periods set to missing in the generation data, so the gaps in Fig 3.2 and the missing half-hours in Table 5.1 should line up with the coloured bars. The cell also records how many asset-months have no data or only partial data (expected when an asset is excluded or not yet online) and checks that every month with data has a contract factor.
+These are the periods set to missing in the generation data, so the gaps in Fig 3.2 and the missing half-hours in Table 5.1 should line up with the coloured bars. The cell also records how many asset-months have no data or only partial data (expected when an asset is excluded or not yet online) and checks that every month with data has a contract factor.
 
 ```{python}
 # =============================================================================
@@ -419,9 +422,9 @@ add_check('Months with data but no contract factor',
 
 ### 5.3 Share of online time in exclusion
 
-**What.** For each asset, the percentage of its online days that fall in each exclusion group (same colours as above). Commissioning and the "not yet online" period are left out of the denominator, so assets with different start dates can be compared. The table gives the numbers; the bars show them, with the total excluded at the end of each bar.
+For each asset, the percentage of its online days that fall in each exclusion group (same colours as above). Commissioning and the "not yet online" period are left out of the denominator, so assets with different start dates can be compared. The table gives the numbers; the bars show them, with the total excluded at the end of each bar.
 
-**How to read.** A large share in the "> 90d" group means one long outage dominates the asset's history, so its contract factor in those months comes from partial or missing data.
+A large share in the "> 90d" group means one long outage dominates the asset's history, so its contract factor in those months comes from partial or missing data.
 
 ```{python}
 # =============================================================================

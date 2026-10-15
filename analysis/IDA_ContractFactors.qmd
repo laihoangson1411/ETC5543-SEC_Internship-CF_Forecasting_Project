@@ -1,0 +1,552 @@
+---
+title: "Initial data analysis: monthly contract factors"
+jupyter: python3
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    code-fold: true          # code is collapsed under a "Code" toggle
+    code-overflow: wrap
+    embed-resources: true
+    grid:
+      body-width: 1100px   # wider text column so the large figures stay readable
+      margin-width: 250px
+    include-in-header:
+      text: |
+        <style>
+        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
+        .cell-output-display img { max-width: 100%; height: auto; }
+        </style>
+---
+
+**Goal.** Compute the monthly contract factor (CF) of every asset and of the wind and solar portfolios, save it, and check that the numbers can be trusted before modelling.
+
+**Contract factor** = DWAP / TWAP, where TWAP is the plain average price of the month, and DWAP is the average price weighted by generation, with negative prices replaced by \$0 (the zero-dollar floor). CF above 1 means the asset earns more than the average price.
+
+**Output:** `data/processed/HistoricContractFactors.csv`.
+
+## 1. Set-up
+
+Imports, the configuration and the half-hourly generation and price from `utilsData` (generation is scaled by MLF and contracted share, in MWh). The lines printed by the loader show how many half-hours were blanked by commissioning or exclusion periods; they become missing values (NaN).
+
+```{python}
+# =============================================================================
+# CELL 1.1 -- Imports, configuration, loading and plot helpers
+#   add_titles, table_title  figure title + insight subtitle, table caption
+#   add_check                record one check for the summary table in §5.5
+# Colours: portfolios are purple (wind) and orange (solar); every single asset has its own colour,
+# the same in every figure, and the line styles give a second cue.
+# =============================================================================
+
+import os, sys, warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.transforms import ScaledTranslation
+from matplotlib.colors import LinearSegmentedColormap
+from IPython.display import display, Markdown
+
+warnings.filterwarnings('ignore')
+
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
+
+from utilsContractFactors import aggregateContractFactorsByGenType
+from utilsData import load_generation_inputs, build_targets
+
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
+
+cfg = {
+    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
+    'analysis_start': '2022-07-01 00:00:00',
+    'analysis_end': '2026-06-30 23:30:00',
+    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
+    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
+}
+all_assets = cfg['wind_assets'] + cfg['solar_assets']
+
+gen_scaled, vret, capacity = load_generation_inputs(cfg, DATA_DIR)
+print(f'\nGeneration table: {gen_scaled.shape[0]:,} half-hours, {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
+
+# ── Plot style ──
+GREY = '#888888'
+PURPLE, ORANGE = '#391B56', '#E67E22'                    # portfolio colours: wind = purple, solar = orange
+ASSET_COLORS = ['#2171B5', '#D62728', '#7B3FA0', '#E6B800']   # blue, red, purple, yellow: one per asset in a panel
+COLOR = {**dict(zip(cfg['wind_assets'], ASSET_COLORS)),       # wind assets
+         **dict(zip(cfg['solar_assets'], ASSET_COLORS)),      # solar assets (own panel, same palette)
+         'WIND': PURPLE, 'SOLAR': ORANGE}                      # portfolios                                                # portfolios
+LINESTYLES = ['-', '--', '-.', ':']                      # second cue besides colour
+
+
+def add_titles(fig, title, subtitle=None):
+    """Bold figure title with an optional one-line insight (subtitle) below it.
+
+    Call after fig.tight_layout(); the text is placed just above the top of the figure.
+    """
+    def put(text, offset_pt, **kw):
+        shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
+        fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
+    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
+    if subtitle:
+        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+
+
+def table_title(title, note=None):
+    """Print a bold table caption (and an optional italic note) above display(df)."""
+    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
+
+
+checks = []   # filled by add_check, shown in §5.5
+
+def add_check(name, n_problems, info=False):
+    """Record a check. Status: OK (0 problems), CHECK (problems found), INFO (expected, good to know)."""
+    checks.append({'check': name, 'count': int(n_problems),
+                   'status': 'OK' if n_problems == 0 else ('INFO' if info else 'CHECK')})
+```
+
+## 2. Monthly contract factors
+
+`build_targets` gives one row per month for each asset and for the wind portfolio; the solar portfolio is added the same way. For each `<asset>` (and `WIND`, `SOLAR`) the table has generation, TWAP, DWAP, contract DWAP, `_ContractFactor`, revenues and `_TotalPeriods` (half-hours with data). The portfolio columns add up volumes and revenues, and use a generation-weighted average for prices and factors.
+
+The calendar, gen factor and capacity factor columns are dropped before saving. The file is then read back and compared with the table in memory, to be sure nothing is lost (columns, dates, missing values, precision). A month with no data stays empty (NaN) in the file.
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- Compute the monthly table, save HistoricContractFactors.csv and check it
+# Read back with: pd.read_csv(path, index_col='Time-ending', parse_dates=True)
+# =============================================================================
+
+monthly = build_targets(gen_scaled, cfg, capacity)                                    # assets + WIND
+monthly = aggregateContractFactorsByGenType(monthly, cfg['solar_assets'], 'SOLAR')    # + SOLAR
+
+# Drop calendar features (derived, not data), the gen factor and the capacity factor columns
+drop_cols = ['month', 'month_sin', 'month_cos', 'FY', 'Season'] + [c for c in monthly.columns if c.endswith(('_GenFactor', '_CapFactor'))]
+cf_monthly = monthly.drop(columns=drop_cols)
+portfolios = ['WIND', 'SOLAR']
+names = cfg['wind_assets'] + ['WIND'] + cfg['solar_assets'] + ['SOLAR']     # order used in the tables
+
+# ── Save ──
+out_dir = os.path.join(DATA_DIR, 'processed')
+os.makedirs(out_dir, exist_ok=True)
+fpath = os.path.join(out_dir, 'HistoricContractFactors.csv')
+cf_monthly.to_csv(fpath, index=True, index_label='Time-ending')
+print(f'✔ Saved: {fpath}')
+print(f'  {len(cf_monthly)} months ({cf_monthly.index.min():%Y-%m} -> {cf_monthly.index.max():%Y-%m}), {cf_monthly.shape[1]} columns')
+
+# ── Read it back and compare ──
+back = pd.read_csv(fpath, index_col='Time-ending', parse_dates=True)
+ok = (list(back.columns) == list(cf_monthly.columns)
+      and len(back) == len(cf_monthly) and bool((back.index == cf_monthly.index).all())
+      and bool((back.isna().values == cf_monthly.isna().values).all())
+      and float(np.nanmax(np.abs(back.values - cf_monthly.values))) < 1e-9)
+print(f'  read-back check (columns, months, missing cells, values): {"passed" if ok else "FAILED"}')
+add_check('Saved CSV differs from the table in memory', int(not ok))
+
+# ── Preview ──
+cols = ['VIC1Price_TWAP'] + [f'{p}_ContractFactor' for p in portfolios]
+table_title('Table 2.1 – Portfolio columns, first and last 3 months', 'TWAP in $/MWh; the factors are ratios')
+display(pd.concat([cf_monthly[cols].head(3), cf_monthly[cols].tail(3)]).round(3))
+```
+
+## 3. Time series
+
+### 3.1 Price and portfolio contract factors
+
+Monthly price (TWAP) with the contract factor of the wind and solar portfolios. The grey vertical lines mark 1 July, the start of each financial year, and the dotted line is 1. Look for sudden jumps that do not follow the price.
+
+```{python}
+# =============================================================================
+# CELL 3.1 -- Monthly price and portfolio contract factors
+# =============================================================================
+
+fy_starts = pd.date_range(cf_monthly.index.min(), cf_monthly.index.max(), freq='YS-JUL')
+
+fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True)
+axes[0].plot(cf_monthly['VIC1Price_TWAP'], color=GREY, lw=1.6)
+axes[0].set_ylabel('VIC1 TWAP (\\$/MWh)')
+axes[0].set_title('Monthly average price', loc='left', fontsize=10)
+
+for ax, p in zip(axes[1:], portfolios):
+    ax.plot(cf_monthly[f'{p}_ContractFactor'], color=COLOR[p], lw=1.8)
+    ax.axhline(1, color='black', lw=0.7, ls=':')
+    ax.set_ylabel('Contract factor')
+    ax.set_title(f'{p.title()} portfolio', loc='left', fontsize=10)
+
+for ax in axes:
+    for d in fy_starts:
+        ax.axvline(d, color='#dddddd', lw=0.8, zorder=0)
+    ax.spines[['top', 'right']].set_visible(False)
+
+fig.tight_layout()
+w, s = cf_monthly['WIND_ContractFactor'], cf_monthly['SOLAR_ContractFactor']
+add_titles(fig, 'Fig 3.1 – Monthly price and portfolio contract factors',
+           f'Wind CF ranges {w.min():.2f}-{w.max():.2f}, solar CF {s.min():.2f}-{s.max():.2f}')
+display(fig)
+plt.close(fig)
+```
+
+### 3.2 Contract factor of each asset
+
+One line per asset. Assets of the same type should move together (same weather, same prices), so a line that leaves the group needs an explanation. A **gap** in a line is a month with no data (before the asset started, or in an exclusion period).
+
+```{python}
+# =============================================================================
+# CELL 3.2 -- Contract factor of each asset (wind left, solar right)
+# =============================================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(15, 4.5), sharex=True)
+for ax, (gname, assets) in zip(axes, [('Wind', cfg['wind_assets']), ('Solar', cfg['solar_assets'])]):
+    for a in assets:
+        ax.plot(cf_monthly[f'{a}_ContractFactor'], color=COLOR[a], lw=1.6, label=a)
+    ax.set_title(f'{gname} assets', loc='left', fontsize=10)
+    ax.set_ylabel('Contract factor')
+    ax.legend(loc='upper right', frameon=False, fontsize=8, ncol=len(assets))
+    ax.spines[['top', 'right']].set_visible(False)
+fig.tight_layout()
+n_gap = int(cf_monthly[[f'{a}_ContractFactor' for a in all_assets]].isna().sum().sum())
+add_titles(fig, 'Fig 3.2 – Monthly contract factor by asset',
+           f'{n_gap} asset-months have no value (gaps in the lines); see the exclusion periods in §5.2')
+display(fig)
+plt.close(fig)
+```
+
+## 4. Min / max check
+
+The **contract factor** cannot be below 0 (the floor keeps the DWAP non-negative), and a value above 3 is not plausible for these assets. Table 4.1 gives, for each asset and portfolio, the smallest and largest monthly value with its month, the mean, and the number of months outside these limits (should be 0). Check that each min and max month matches something you can explain (price spike, windy or calm month, outage).
+
+```{python}
+# =============================================================================
+# CELL 4.1 -- Min / max of the monthly contract factor
+# Limits: contract factor in [0, 3].
+# =============================================================================
+
+CF_BOUNDS = (0, 3)
+rows = []
+for n in names:
+    s = cf_monthly[f'{n}_ContractFactor'].dropna()
+    if s.empty:
+        continue
+    rows.append({'asset': n, 'months': len(s),
+                 'min': s.min(), 'min month': f'{s.idxmin():%Y-%m}',
+                 'max': s.max(), 'max month': f'{s.idxmax():%Y-%m}',
+                 'mean': s.mean(), 'outside limits': int(((s < CF_BOUNDS[0]) | (s > CF_BOUNDS[1])).sum())})
+range_tbl = pd.DataFrame(rows).set_index('asset')
+
+table_title('Table 4.1 – Minimum, maximum and mean of the monthly contract factor',
+            'Limits: 0 to 3; "outside limits" counts months')
+display(range_tbl.round(3))
+add_check(f'Months with contract factor outside {list(CF_BOUNDS)}', range_tbl['outside limits'].sum())
+```
+
+## 5. Data quality
+
+`OK` means no problem, `CHECK` means something should be looked at, and `INFO` means the result is expected (for example months before an asset started). Section 5.5 collects all checks in one table.
+
+### 5.1 Half-hourly input
+
+Checks on the raw half-hourly data: duplicated timestamps, steps that are not 30 minutes, missing prices and prices outside the market limits (floor -\$1,000/MWh, cap up to \$20,300/MWh depending on the year). Table 5.1 then shows each asset: missing half-hours (above 0 is expected, because commissioning and exclusion periods are blank), negative values, values more than 1% above capacity, solar generation at night (21:00-04:30), and the longest run of the same non-zero value in half-hours. A run of 24 or more (12 hours) can mean a stuck meter.
+
+```{python}
+# =============================================================================
+# CELL 5.1 -- Half-hourly input checks: timestamps, price and generation per asset
+# =============================================================================
+
+idx, price = gen_scaled.index, gen_scaled['VIC1Price']
+PRICE_MIN, PRICE_MAX = -1000, 20300      # NEM market price floor and the highest cap (varies by year)
+FLAT_LIMIT = 24                          # half-hours; a longer run of the same non-zero value is suspicious
+NIGHT_HOURS = [21, 22, 23, 0, 1, 2, 3, 4]
+
+
+def longest_flat_run(s):
+    """Longest run of identical consecutive non-zero values (in half-hours); long runs hint at a stuck meter."""
+    run_id = (s != s.shift()).cumsum()                       # new id every time the value changes
+    runs = s.groupby(run_id).agg(['size', 'first'])
+    runs = runs[runs['first'].notna() & (runs['first'] != 0)]
+    return int(runs['size'].max()) if len(runs) else 0
+
+
+# ── Timestamps and price ──
+add_check('Duplicated half-hour timestamps', idx.duplicated().sum())
+add_check('Half-hour steps that are not 30 minutes', (idx.to_series().diff().dropna() != pd.Timedelta(minutes=30)).sum())
+add_check('Half-hours with missing price', price.isna().sum())
+add_check('Half-hours with price outside the market limits', ((price < PRICE_MIN) | (price > PRICE_MAX)).sum())
+print(f'Price: {price.min():,.0f} to {price.max():,.0f} $/MWh; {(price < 0).mean() * 100:.1f}% of half-hours are negative')
+
+# ── Generation per asset ──
+rows = []
+for a in all_assets:
+    g = gen_scaled[a]
+    cap_hh = capacity[a] * 0.5                                # MWh in one half-hour at full capacity
+    night = g[idx.hour.isin(NIGHT_HOURS)]
+    rows.append({'asset': a,
+                 'missing half-hours': int(g.isna().sum()), 'missing %': g.isna().mean() * 100,
+                 'negative values': int((g < 0).sum()),
+                 'above capacity': int((g > cap_hh * 1.01).sum()),
+                 'solar at night': int((night > cap_hh * 0.01).sum()) if a in cfg['solar_assets'] else np.nan,
+                 'longest flat run': longest_flat_run(g)})
+gen_tbl = pd.DataFrame(rows).set_index('asset')
+table_title('Table 5.1 – Generation checks by asset', '"Longest flat run" is in half-hours')
+display(gen_tbl.round(1))
+
+add_check('Negative generation values', gen_tbl['negative values'].sum())
+add_check('Generation above capacity (more than 1% over)', gen_tbl['above capacity'].sum())
+add_check('Solar generation at night', gen_tbl['solar at night'].sum())
+add_check(f'Assets with a flat non-zero run of {FLAT_LIMIT}+ half-hours', (gen_tbl['longest flat run'] >= FLAT_LIMIT).sum())
+add_check('Missing half-hours (commissioning and exclusion periods)', gen_tbl['missing half-hours'].sum(), info=True)
+```
+
+### 5.2 Exclusion periods and availability
+
+**What.** One bar per asset (wind on top, solar below) over the analysis window, from `ExclusionPeriods.csv`:
+
+- **green**: the asset is available,
+- **light grey**: not yet online, or commissioning,
+- **gold / orange / red**: an exclusion period shorter than 14 days / 14-90 days / longer than 90 days (the longer ones show their length in days).
+
+**How to read.** These are the periods set to missing in the generation data, so the gaps in Fig 3.2 and the missing half-hours in Table 5.1 should line up with the coloured bars. The cell also records how many asset-months have no data or only partial data (expected when an asset is excluded or not yet online) and checks that every month with data has a contract factor.
+
+```{python}
+# =============================================================================
+# CELL 5.2 -- Availability timeline and exclusion periods per asset
+# One horizontal bar per asset (wind on top, solar below):
+#  - light grey: before the asset came online / commissioning;  green: available
+#  - gold / orange / red: exclusion periods by length (<14d, 14-90d, >90d)
+# Same colours and rules as the project notebook. The online date of an asset is its first
+# half-hour with positive generation in the raw file.
+# =============================================================================
+
+import matplotlib.dates as mdates
+from matplotlib.patches import Patch
+
+excl = pd.read_csv(os.path.join(DATA_DIR, 'raw', 'ExclusionPeriods.csv'), parse_dates=['ExclusionStart', 'ExclusionEnd'])
+gen_raw = pd.read_csv(os.path.join(DATA_DIR, 'raw', 'GenerationMW_FY19-26.csv'), index_col=0, parse_dates=True)
+start, end = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
+
+
+def first_online_dates(gen, assets):
+    """First half-hour with positive generation of each asset (used as its 'online' date)."""
+    out = {}
+    for a in assets:
+        positive = gen.index[(gen[a] > 0).values]
+        out[a] = positive.min() if len(positive) > 0 else pd.NaT
+    return out
+
+
+def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start, end):
+    """Timeline of availability and exclusion periods for every asset (wind on top, solar below).
+
+    An exclusion that starts on or before the asset's first output is a commissioning period and is
+    drawn in grey (like "not yet online"); the asset counts as available after it ends.
+    """
+    assets = wind_assets + solar_assets
+    n = len(assets)
+    fig, ax = plt.subplots(figsize=(16, 0.7 * n + 2.5))
+
+    def bar(y, s, e, **kw):
+        """Draw a bar from date s to date e on row y (clipped to the plot window)."""
+        s, e = max(s, start), min(e, end)
+        if e > s:
+            ax.broken_barh([(mdates.date2num(s), mdates.date2num(e) - mdates.date2num(s))], (y - 0.3, 0.6), **kw)
+
+    for i, a in enumerate(assets):
+        y = n - 1 - i                                         # first asset at the top
+        online = first_online.get(a)
+        online = start if pd.isna(online) else max(online, start)
+        asset_excl = excl[excl['DUID'] == a]
+        # Commissioning = exclusions that start on or before the first output
+        comm = asset_excl[asset_excl['ExclusionStart'] <= online]
+        available_from = max([online] + list(comm['ExclusionEnd']))
+        bar(y, start, available_from, facecolor='lightgrey', alpha=0.5)              # not yet online / commissioning
+        bar(y, available_from, end, facecolor='mediumseagreen', alpha=0.35)          # available
+
+        for _, r in asset_excl.iterrows():
+            es, ee = r['ExclusionStart'], r['ExclusionEnd']
+            if ee < start or es > end:
+                continue                                      # outside the plot window
+            days = (ee - es).days
+            if es <= online:
+                bar(y, es, ee, facecolor='lightgrey', alpha=0.5)                     # commissioning: grey, no label
+            else:
+                colour, alpha = ('red', 0.8) if days > 90 else ('darkorange', 0.7) if days > 14 else ('gold', 0.6)
+                bar(y, es, ee, facecolor=colour, alpha=alpha, edgecolor='black', linewidth=0.3)
+                if days > 14:                                 # label the longer exclusions with their length
+                    mid = max(es, start) + (min(ee, end) - max(es, start)) / 2
+                    ax.text(mid, y, f'{days}d', ha='center', va='center', fontsize=7, fontweight='bold', color='white')
+
+    ax.axhline(len(solar_assets) - 0.5, color='black', linewidth=0.8)                # wind | solar separator
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(assets[::-1], fontsize=9)
+    ax.set_ylim(-0.6, n - 0.4)
+    ax.set_xlim(start, end)
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
+    ax.tick_params(axis='x', labelsize=8)
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    ax.legend(handles=[
+        Patch(facecolor='mediumseagreen', alpha=0.35, label='Available (online)'),
+        Patch(facecolor='lightgrey', alpha=0.5, label='Not yet online / commissioning'),
+        Patch(facecolor='red', alpha=0.8, edgecolor='black', linewidth=0.3, label='Exclusion > 90d'),
+        Patch(facecolor='darkorange', alpha=0.7, edgecolor='black', linewidth=0.3, label='Exclusion 14-90d'),
+        Patch(facecolor='gold', alpha=0.6, edgecolor='black', linewidth=0.3, label='Exclusion < 14d'),
+    ], loc='upper center', bbox_to_anchor=(0.5, -0.08), ncol=5, fontsize=8, frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+online = first_online_dates(gen_raw, all_assets)
+fig = plot_exclusion_periods(excl, online, cfg['wind_assets'], cfg['solar_assets'], start, end)
+longest = excl.loc[(excl['ExclusionEnd'] - excl['ExclusionStart']).idxmax()]
+add_titles(fig, 'Fig 5.1 – Availability and exclusion periods by asset',
+           f'{len(excl)} exclusion period(s) in the table; the longest is {longest["DUID"]} '
+           f'({(longest["ExclusionEnd"] - longest["ExclusionStart"]).days} days)')
+display(fig)
+plt.close(fig)
+
+# Months with no or partial data: expected when an asset is excluded or not yet online
+expected_hh = cf_monthly.index.days_in_month * 48                   # half-hours in each month
+coverage = pd.DataFrame({a: cf_monthly[f'{a}_TotalPeriods'] / expected_hh * 100 for a in all_assets})
+add_check('Asset-months with no data (before commissioning or in exclusion periods)', (coverage == 0).sum().sum(), info=True)
+add_check('Asset-months with partial coverage', ((coverage > 0) & (coverage < 99.99)).sum().sum(), info=True)
+# A month with data should always have a contract factor
+add_check('Months with data but no contract factor',
+          sum(int(((cf_monthly[f'{a}_TotalPeriods'] > 0) & cf_monthly[f'{a}_ContractFactor'].isna()).sum()) for a in all_assets))
+```
+
+### 5.3 Share of online time in exclusion
+
+**What.** For each asset, the percentage of its online days that fall in each exclusion group (same colours as above). Commissioning and the "not yet online" period are left out of the denominator, so assets with different start dates can be compared. The table gives the numbers; the bars show them, with the total excluded at the end of each bar.
+
+**How to read.** A large share in the "> 90d" group means one long outage dominates the asset's history, so its contract factor in those months comes from partial or missing data.
+
+```{python}
+# =============================================================================
+# CELL 5.3 -- Share of online days in each exclusion group (table + stacked bars)
+# Groups by the full length of the exclusion (<14d, 14-90d, >90d); the longer group wins when
+# exclusions overlap. Commissioning and "not yet online" days are not counted.
+# =============================================================================
+
+EXCL_CATS = ['Available', 'Exclusion < 14d', 'Exclusion 14-90d', 'Exclusion > 90d']
+SHOW_CATS = EXCL_CATS[1:]                                       # groups shown in the table and bars
+EXCL_COLOURS = {'Available': '#8fd3a9', 'Exclusion < 14d': 'gold', 'Exclusion 14-90d': 'darkorange', 'Exclusion > 90d': 'red'}
+
+
+def exclusion_share_table(excl, first_online, assets, start, end):
+    """% of each asset's online days that fall in each exclusion group.
+
+    Works at day level, so overlapping exclusions are not double counted (the longer group wins).
+
+    Returns:
+        DataFrame indexed by asset with one % column per group (incl. Available),
+        plus online_days and n_exclusions.
+    """
+    rows = {}
+    for a in assets:
+        online = first_online.get(a)
+        online = start if pd.isna(online) else max(online, start)
+        a_excl = excl[excl['DUID'] == a]
+        # Commissioning = exclusions starting on or before first output; the asset is available after them
+        comm = a_excl[a_excl['ExclusionStart'] <= online]
+        available_from = max([online] + list(comm['ExclusionEnd']))
+
+        days = pd.date_range(available_from.normalize(), end.normalize(), freq='D')
+        status = pd.Series('Available', index=days)             # every online day starts as available
+
+        items = []                                              # real (non-commissioning) exclusions with their group
+        for _, r in a_excl.iterrows():
+            es, ee = r['ExclusionStart'], r['ExclusionEnd']
+            if es <= online or ee < available_from or es > end:
+                continue
+            length = (ee - es).days
+            label = 'Exclusion > 90d' if length > 90 else 'Exclusion 14-90d' if length > 14 else 'Exclusion < 14d'
+            items.append((es, ee, label))
+
+        # Paint shorter groups first so longer groups overwrite them where they overlap
+        for es, ee, label in sorted(items, key=lambda t: EXCL_CATS.index(t[2])):
+            s, e = max(es, days[0]), min(ee, days[-1])
+            if e >= s:
+                status.loc[s:e] = label
+
+        share = status.value_counts(normalize=True).reindex(EXCL_CATS, fill_value=0) * 100
+        rows[a] = {**share.to_dict(), 'online_days': len(days), 'n_exclusions': len(items)}
+    return pd.DataFrame(rows).T
+
+
+def plot_exclusion_share(tbl, wind_assets, solar_assets):
+    """Horizontal stacked bars of the % of online days in each exclusion group (wind on top, solar below)."""
+    assets = wind_assets + solar_assets
+    n = len(assets)
+    fig, ax = plt.subplots(figsize=(13, 0.7 * n + 2.2))
+    for i, a in enumerate(assets):
+        y = n - 1 - i                                            # first asset at the top
+        n_groups = int((tbl.loc[a, SHOW_CATS] > 0).sum())        # labels only when the asset has 2+ groups
+        left = 0.0
+        for cat in SHOW_CATS:
+            w = tbl.loc[a, cat]
+            ax.barh(y, w, left=left, height=0.6, color=EXCL_COLOURS[cat], edgecolor='white', linewidth=0.5)
+            if n_groups > 1 and w >= 0.5:
+                is_white = cat == 'Exclusion > 90d'
+                ax.text(left + w / 2, y, f'{w:.1f}%', ha='center', va='center', fontsize=8,
+                        color='white' if is_white else 'black', fontweight='bold' if is_white else 'normal')
+            left += w
+        ax.text(left + 0.3, y, f'{left:.1f}%', ha='left', va='center', fontsize=8)   # total excluded
+    ax.axhline(len(solar_assets) - 0.5, color='black', linewidth=0.8)    # wind | solar separator
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(assets[::-1], fontsize=9)
+    ax.set_xlim(0, max(tbl[SHOW_CATS].sum(axis=1).max() * 1.15, 1))      # zoom to the excluded range
+    ax.set_xlabel('% of online days')
+    ax.grid(axis='x', linestyle='--', alpha=0.3)
+    ax.legend(handles=[Patch(facecolor=EXCL_COLOURS[c], label=c) for c in SHOW_CATS],
+              loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=3, fontsize=8, frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+share_tbl = exclusion_share_table(excl, online, all_assets, start, end)
+out = share_tbl[SHOW_CATS].copy()
+out['Total excluded'] = out.sum(axis=1)
+out['online_days'] = share_tbl['online_days'].astype(int)
+out['n_exclusions'] = share_tbl['n_exclusions'].astype(int)
+table_title('Table 5.3 – Share of online days in each exclusion group (%)', 'Commissioning and not-yet-online days are not counted')
+display(out.round(1))
+
+fig = plot_exclusion_share(share_tbl, cfg['wind_assets'], cfg['solar_assets'])
+add_titles(fig, 'Fig 5.2 – Share of online time in exclusion, by group',
+           f'Largest total: {out["Total excluded"].idxmax()} with {out["Total excluded"].max():.1f}% of its online days')
+display(fig)
+plt.close(fig)
+```
+
+### 5.4 Outliers
+
+Each monthly contract factor is compared with the typical value of its own series, using a robust z-score (based on the median, so one extreme month cannot hide itself). Months with a score above 3.5 in absolute value are listed. A flagged month is a question, not an error: it can be a real event or a data problem. The contract factor is seasonal, so compare with the same month in other years.
+
+```{python}
+# =============================================================================
+# CELL 5.4 -- Outliers in the monthly contract factor (robust z-score)
+# z = 0.6745 * (x - median) / MAD on each series; |z| > 3.5 is flagged.
+# =============================================================================
+
+Z_LIMIT = 3.5
+rows = []
+for n in names:
+    s = cf_monthly[f'{n}_ContractFactor'].dropna()
+    mad = (s - s.median()).abs().median()
+    if len(s) < 6 or mad == 0:
+        continue
+    z = 0.6745 * (s - s.median()) / mad
+    for d, zv in z[z.abs() > Z_LIMIT].items():
+        rows.append({'asset': n, 'month': f'{d:%Y-%m}', 'contract factor': s[d], 'series median': s.median(), 'robust z': zv})
+
+table_title(f'Table 5.4 – Months flagged as outliers (|robust z| > {Z_LIMIT})')
+if rows:
+    display(pd.DataFrame(rows).set_index(['asset', 'month']).round(3))
+else:
+    print('No month is flagged.')
+add_check(f'Months flagged as outliers (|robust z| > {Z_LIMIT})', len(rows), info=True)
+```
+

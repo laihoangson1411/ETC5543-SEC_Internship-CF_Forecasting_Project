@@ -30,7 +30,6 @@ format:
 |---|---|
 | Corrupted window | 7 Oct 2025 to 14 Apr 2026, the period where DTN wind speed is wrong |
 | Reference | Clean years FY23-25, same calendar months as the period we check or fix |
-| Slot | One of the 48 half-hours of a day. QM runs separately for every (month, slot) group, so the day/night pattern is kept |
 | Squashing ratio | sd of corrupted data / sd of reference. 1 = normal, below 1 = squashed |
 
 **Flow**
@@ -54,7 +53,6 @@ Loads the data and prepares the tables and helper functions that every later ste
 
 ### 1.1 Load the data
 
-Imports, the configuration `cfg` (analysis window, wind farms, weather stations) and the loading functions from `utilsData`. We load the **raw** DTN wind speed (`apply_qm=False`) because this file is the one that creates the corrected version.
 
 ```{python}
 # =============================================================================
@@ -278,9 +276,9 @@ Before fixing anything, show that the data is really wrong. A time plot (2.1) sh
 
 ### 2.1 Wind speed vs wind generation over time
 
-**What.** Monthly mean wind speed at station 89002 (blue line) against the range seen in the same calendar month in earlier years (blue band). The green dashed line is the wind fleet capacity factor (generation / capacity). The red area is the corrupted period.
+Monthly mean wind speed at station 89002 (blue line) against the range seen in the same calendar month in earlier years (blue band). The green dashed line is the wind fleet capacity factor (generation / capacity). The red area is the corrupted period.
 
-**How to read.** If the blue line leaves the band inside the red area while the green line stays normal, the farms produced as usual but the sensor says it was calm. The sensor is wrong, not the weather.
+If the blue line leaves the band inside the red area while the green line stays normal, the farms produced as usual but the sensor says it was calm. The sensor is wrong, not the weather.
 
 ```{python}
 # =============================================================================
@@ -309,7 +307,7 @@ ax2.plot(cf_wind_monthly, 'g--', alpha=0.7, label='Wind fleet capacity factor')
 ax.legend(loc='upper left'); ax2.legend(loc='upper right')
 ax.set_ylabel('Wind (m/s)'); ax2.set_ylabel('Capacity Factor')
 fig.tight_layout()
-add_titles(fig, 'Fig 2.1 – Monthly mean wind speed (station 89002) vs wind fleet capacity factor',
+add_titles(fig, 'Fig 2.1 - Monthly mean wind speed (station 89002) vs wind fleet capacity factor',
            'Measured wind drops sharply while generation stays normal → the weather data is wrong, not the weather')
 display(fig)
 plt.close(fig)
@@ -317,7 +315,7 @@ plt.close(fig)
 
 ### 2.2 How much is the link between wind speed and generation damaged?
 
-**What.** For each station, compares the clean reference (Oct-Mar of FY23-25) with the corrupted period (Oct 2025 - Mar 2026).
+For each station, compares the clean reference (Oct-Mar of FY23-25) with the corrupted period (Oct 2025 - Mar 2026).
 
 **Columns.**
 
@@ -326,7 +324,7 @@ plt.close(fig)
 - `sd`: spread of wind speed.
 - `ties`: share of half-hours that repeat the previous value (a sign of smoothing).
 
-**How to read.** `sd` falls and `ties` rises in the corrupted period: the data is squashed and smoothed. The key column is `spearman_bad`. If it is still high, the *order* of the values is still right and QM can rebuild their *size*. The sentence printed below the table gives the verdict.
+`sd` falls and `ties` rises in the corrupted period: the data is squashed and smoothed. The key column is `spearman_bad`. If it is still high, the *order* of the values is still right and QM can rebuild their *size*. The sentence printed below the table gives the verdict.
 
 ```{python}
 # =============================================================================
@@ -362,7 +360,7 @@ for stn in cfg['station_ids']:
                  'sd_ref': r['sd'], 'sd_bad': b['sd'],
                  'ties_ref': r['ties'], 'ties_bad': b['ties']})
 summary = pd.DataFrame(rows).set_index('station')
-table_title('Table 2.1 – Wind speed vs wind generation: reference (Oct-Mar FY23-25) vs corrupted period',
+table_title('Table 2.1 - Wind speed vs wind generation: reference (Oct-Mar FY23-25) vs corrupted period',
             'Pearson, Spearman, sd and share of repeated values, by station')
 display(summary)
 
@@ -382,9 +380,9 @@ QM only works if the corruption is a smooth squashing: the order of the values i
 
 ### 3.1 Is the order of the values kept?
 
-**What.** Scatter of wind speed (x) against wind fleet CF (y). Left: clean reference. Right: corrupted period. The black line is the median CF in each 0.1 m/s wind-speed band.
+Scatter of wind speed (x) against wind fleet CF (y). Left: clean reference. Right: corrupted period. The black line is the median CF in each 0.1 m/s wind-speed band.
 
-**How to read.** If the right-hand cloud looks like the left one squeezed into a narrower x range, and the black line still rises steadily, the corruption keeps the order of the values. Then QM is feasible.
+If the right-hand cloud looks like the left one squeezed into a narrower x range, and the black line still rises steadily, the corruption keeps the order of the values. Then QM is feasible.
 
 ```{python}
 # =============================================================================
@@ -408,7 +406,7 @@ cf_wind_hh = gen_wind / (0.5 * cap_wind_total)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
 for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25)', 'steelblue'),
-                                             (bad, 'Corrupted period (Oct25–Mar26)', 'crimson')]):
+                                             (bad, 'Corrupted period (Oct25-Mar26)', 'crimson')]):
     d = pd.DataFrame({'ws': ws_A[mask], 'cf': cf_wind_hh[mask]}).dropna()
     ax.scatter(d['ws'], d['cf'], s=1, alpha=0.05, color=color)
     # Median line per 0.1 m/s bin
@@ -421,7 +419,7 @@ for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25
     ax.legend(fontsize=7)
 axes[0].set_ylabel('Wind fleet CF (half-hourly)')
 fig.tight_layout()
-add_titles(fig, 'Fig 3.1 – Wind speed vs wind fleet CF: reference vs corrupted period',
+add_titles(fig, 'Fig 3.1 - Wind speed vs wind fleet CF: reference vs corrupted period',
            'Check (1), monotonic? If the corrupted-period median still rises steadily, QM is feasible')
 display(fig)
 plt.close(fig)
@@ -429,9 +427,9 @@ plt.close(fig)
 
 ### 3.2 Is the squashing similar in every month?
 
-**What.** For each month, the ratio corrupted / reference of the sd, the median (p50) and the 90th percentile (p90), printed as a table with the number of half-hours used.
+For each month, the ratio corrupted / reference of the sd, the median (p50) and the 90th percentile (p90), printed as a table with the number of half-hours used.
 
-**How to read.** Ratios below 1 mean squashing. The coefficient of variation (CV) of the sd ratio says how similar the months are: low CV means one rule would fit all months, high CV means each month needs its own mapping. QM in section 4 maps month by month anyway, so this is a safety check.
+Ratios below 1 mean squashing. The coefficient of variation (CV) of the sd ratio says how similar the months are: low CV means one rule would fit all months, high CV means each month needs its own mapping. QM in section 4 maps month by month anyway, so this is a safety check.
 
 ```{python}
 # =============================================================================
@@ -469,16 +467,16 @@ sd_cv = ratios_df['sd_ratio'].std() / ratios_df['sd_ratio'].mean()
 print(f'\nMean sd ratio: {ratios_df["sd_ratio"].mean():.3f} ± {ratios_df["sd_ratio"].std():.3f} (CV={sd_cv:.2f})')
 print(f'Mean p50 ratio: {ratios_df["p50_ratio"].mean():.3f} ± {ratios_df["p50_ratio"].std():.3f}')
 if sd_cv < 0.15:
-    print('→ CV < 0.15: fairly uniform compression → a common Oct–Mar mapping is safe.')
+    print('→ CV < 0.15: fairly uniform compression → a common Oct-Mar mapping is safe.')
 else:
     print('→ CV ≥ 0.15: non-uniform compression → map each month separately.')
 ```
 
 ### 3.3 On which day does the corruption start?
 
-**What.** The squashing does not start on 1 October (the October ratio in 3.2 is close to 1), so this step finds the first bad day. Each day of October 2025 is compared with the average daily mean and sd of earlier Octobers. The first day with a very low mean (below 50% of the reference) or a very low sd (below 40%) is flagged.
+The squashing does not start on 1 October (the October ratio in 3.2 is close to 1), so this step finds the first bad day. Each day of October 2025 is compared with the average daily mean and sd of earlier Octobers. The first day with a very low mean (below 50% of the reference) or a very low sd (below 40%) is flagged.
 
-**How to read.** The printed table shows the days around the start, with the verdict per day. In Fig 3.3 the rolling 24h mean (top) and sd (bottom) fall at the red line. That date is the start of the QM window used from section 4 on.
+The printed table shows the days around the start, with the verdict per day. In Fig 3.3 the rolling 24h mean (top) and sd (bottom) fall at the red line. That date is the start of the QM window used from section 4 on.
 
 ```{python}
 # =============================================================================
@@ -557,7 +555,7 @@ axes[1].set_xlabel('Day')
 axes[1].legend(fontsize=7)
 
 fig.tight_layout()
-add_titles(fig, 'Fig 3.3 – Locating the corruption start day (October 2025, station 89002)',
+add_titles(fig, 'Fig 3.3 - Locating the corruption start day (October 2025, station 89002)',
            'Rolling 24h mean and sd fall sharply on the first corrupted day (red line)')
 display(fig)
 plt.close(fig)
@@ -576,7 +574,7 @@ if first_bad_day:
 
 The corruption is one DTN error that hits all stations, so both stations share the same window and the same method.
 
-**What.** For every (month, half-hour slot) group in the corrupted window:
+For every (month, half-hour slot) group in the corrupted window:
 
 1. rank the corrupted values,
 2. turn the ranks into quantiles,
@@ -642,7 +640,7 @@ for i, stn in enumerate(STATIONS):
                          for label, v in [('Reference', ws[ref].dropna()),
                                           ('Before QM', ws[bad].dropna()),
                                           ('QM-corrected', ws_fixed[bad].dropna())]}).T
-    table_title(f'Table 4.1{"ab"[i]} – Station {stn}: wind speed distribution (m/s)')
+    table_title(f'Table 4.1{"ab"[i]} - Station {stn}: wind speed distribution (m/s)')
     display(dist.round(2))
 
     # Validation plots
@@ -661,7 +659,7 @@ for i, stn in enumerate(STATIONS):
     axes[1].plot(ws[ts_mask], alpha=0.4, color='crimson', lw=0.5, label='Before QM')
     axes[1].plot(ws_fixed[ts_mask], alpha=0.7, color='forestgreen', lw=0.5, label='QM-corrected')
     axes[1].axvline(CORRUPT_START, color='red', lw=2, ls='--', alpha=0.7, label='07/10')
-    axes[1].set_title('Time series Oct–Nov 2025')
+    axes[1].set_title('Time series Oct-Nov 2025')
     axes[1].legend(fontsize=7); axes[1].set_ylabel('m/s')
 
     # (iii) Generation vs wind speed: QM-corrected points should overlap the reference cloud
@@ -672,12 +670,12 @@ for i, stn in enumerate(STATIONS):
     axes[2].legend(fontsize=7, markerscale=10)
 
     fig.tight_layout()
-    add_titles(fig, f'Fig 4.1{"ab"[i]} – Quantile mapping validation, station {stn}',
+    add_titles(fig, f'Fig 4.1{"ab"[i]} - Quantile mapping validation, station {stn}',
                'After QM, the distribution and the generation scatter should overlap the clean reference')
     display(fig)
     plt.close(fig)
 
-table_title('Table 4.1c – QM summary and Pearson check (wind speed vs wind generation)',
+table_title('Table 4.1c - QM summary and Pearson check (wind speed vs wind generation)',
             'Pearson barely moves because QM keeps ranks; the amplitude is checked directly in §5')
 display(pd.DataFrame(summary_rows).set_index('station').round(3))
 ```
@@ -691,12 +689,12 @@ Pearson cannot tell squashed data from corrected data, so the amplitude is check
 
 ### 5.1 Corrected data vs the clean reference, month by month
 
-**What.** For each station and each month of the window, the wind speed is compared with the same calendar month of FY23-25, before and after QM:
+For each station and each month of the window, the wind speed is compared with the same calendar month of FY23-25, before and after QM:
 
 - *mean ratio* and *sd ratio*: 1 means the same as the reference.
 - *KS distance*: largest gap between the two distributions, 0 means identical.
 
-**How to read.** From red (before) to green (after), the ratios should move from below 1 to about 1 and the KS distance should fall towards 0. A month where green is still far from 1 is a month QM could not fix.
+From red (before) to green (after), the ratios should move from below 1 to about 1 and the KS distance should fall towards 0. A month where green is still far from 1 is a month QM could not fix.
 
 **Limit.** This checks the *distribution* (level and spread). QM does not restore the exact timing of each half-hour: it keeps the order that DTN gave, and Table 2.2 (Spearman) showed that this order is still informative.
 
@@ -728,7 +726,7 @@ for i, stn in enumerate(STATIONS):
                      'sd ratio before': b.std() / r.std(), 'sd ratio after': q.std() / r.std(),
                      'KS before': ks_2samp(b, r).statistic, 'KS after': ks_2samp(q, r).statistic})
     check[stn] = pd.DataFrame(rows).set_index('month')
-    table_title(f'Table 5.1{"ab"[i]} – Station {stn}: wind speed vs the clean reference, before and after QM',
+    table_title(f'Table 5.1{"ab"[i]} - Station {stn}: wind speed vs the clean reference, before and after QM',
                 'Ratios: 1 = same as the reference. KS distance: 0 = identical distribution')
     display(check[stn].round(3))
 
@@ -752,7 +750,7 @@ for r_i, stn in enumerate(STATIONS):
 fig.tight_layout()
 sdb = {s: check[s]['sd ratio before'].mean() for s in STATIONS}
 sda = {s: check[s]['sd ratio after'].mean() for s in STATIONS}
-add_titles(fig, 'Fig 5.1 – Wind speed vs the clean reference: before and after QM',
+add_titles(fig, 'Fig 5.1 - Wind speed vs the clean reference: before and after QM',
            f'Average sd ratio {sdb[89002]:.2f} to {sda[89002]:.2f} (station 89002) and '
            f'{sdb[86338]:.2f} to {sda[86338]:.2f} (station 86338); 1 = same as reference')
 display(fig)
@@ -761,7 +759,7 @@ plt.close(fig)
 
 ### 5.2 Simulation on clean winters: can QM undo a corruption we make ourselves?
 
-**What.** A test where we know the right answer.
+A test where we know the right answer.
 
 1. Take two clean winters, FY24 (Oct 23 - Mar 24) and FY25 (Oct 24 - Mar 25), as the truth.
 2. Squash them the way the real corruption did (the real sd ratio of each month, plus a 3-point smoothing).
@@ -774,7 +772,7 @@ plt.close(fig)
 - *KS distance*: gap between the distribution of the month and the true distribution. 0 means identical.
 - *Recovery (%)*: share of the error that QM removes. 100% is perfect, 0% means no help.
 
-**How to read.** Left panels: the monthly sd. Red (squashed) sits below the blue truth, and green (QM) should be back close to blue. Right panels: the KS distance to the truth, where green should be well below red. We do not score half-hour by half-hour errors: QM restores the *size* of the values, not their exact timing, so that measure would punish it unfairly.
+Left panels: the monthly sd. Red (squashed) sits below the blue truth, and green (QM) should be back close to blue. Right panels: the KS distance to the truth, where green should be well below red. We do not score half-hour by half-hour errors: QM restores the *size* of the values, not their exact timing, so that measure would punish it unfairly.
 
 ```{python}
 # =============================================================================
@@ -792,8 +790,8 @@ real_bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
 real_ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 
 # Simulate on two clean winters; the QM reference is the other clean winters (the simulated one is excluded)
-sim_windows = [('FY24 (Oct23–Mar24)', '2023-10-07', '2024-04-01'),
-               ('FY25 (Oct24–Mar25)', '2024-10-07', '2025-04-01')]
+sim_windows = [('FY24 (Oct23-Mar24)', '2023-10-07', '2024-04-01'),
+               ('FY25 (Oct24-Mar25)', '2024-10-07', '2025-04-01')]
 
 def recovery_pct(before, after):
     """Share of the error removed by QM (100 = perfect)."""
@@ -844,13 +842,13 @@ val_summary = pd.DataFrame(rows).set_index(['station', 'metric'])
 rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in STATIONS for l, k in metrics}
 
 fig.tight_layout()
-add_titles(fig, 'Fig 5.2 – Simulation on clean winters: how close does QM get to the truth?',
+add_titles(fig, 'Fig 5.2 - Simulation on clean winters: how close does QM get to the truth?',
            f'QM removes {rec[(89002, "sd_err")]:.0f}% / {rec[(86338, "sd_err")]:.0f}% of the monthly sd error and '
            f'{rec[(89002, "ks")]:.0f}% / {rec[(86338, "ks")]:.0f}% of the distribution gap (stations 89002 / 86338)')
 display(fig)
 plt.close(fig)
 
-table_title('Table 5.2 – Simulation summary: error before and after QM',
+table_title('Table 5.2 - Simulation summary: error before and after QM',
             'Average over the 12 simulated months; Recovery = share of the error QM removes (100% = perfect)')
 display(val_summary.round(3))
 ```
@@ -861,9 +859,9 @@ The corruption does not stop on 31 March. 6.1 checks whether the months after Ma
 
 ### 6.1 Do March to June 2026 still look corrupted?
 
-**What.** Each month of Mar-Jun 2026 is compared with the same month of FY23-25: ratio of the sd and ratio of the mean.
+Each month of Mar-Jun 2026 is compared with the same month of FY23-25: ratio of the sd and ratio of the mean.
 
-**How to read.** A low `sd_ratio` or a low `mean_ratio` means the data is still squashed. The `flag` column marks `COMPRESSED` (sd ratio below 0.6) and `borderline` (below 0.8).
+A low `sd_ratio` or a low `mean_ratio` means the data is still squashed. The `flag` column marks `COMPRESSED` (sd ratio below 0.6) and `borderline` (below 0.8).
 
 ```{python}
 # =============================================================================
@@ -886,16 +884,16 @@ for stn in [89002, 86338]:
             rows.append({'station': stn, 'month 2026': pd.Timestamp(2026, m, 1).strftime('%b'),
                          'sd_ratio': r_sd, 'mean_ratio': r_mean,
                          'flag': 'COMPRESSED' if r_sd < 0.6 else ('borderline' if r_sd < 0.8 else '')})
-table_title('Table 6.1 – Mar-Jun 2026 vs the same months of FY23-25',
+table_title('Table 6.1 - Mar-Jun 2026 vs the same months of FY23-25',
             'Ratio of 2026 to the FY23-25 reference; a low ratio means the data is still corrupted')
 display(pd.DataFrame(rows).set_index(['station', 'month 2026']).round(3))
 ```
 
 ### 6.2 On which day does the corruption end?
 
-**What.** Day-by-day detection in April 2026. Detection only, nothing is modified here.
+Day-by-day detection in April 2026. Detection only, nothing is modified here.
 
-**How to read.** The figure shows the daily mean wind speed of April 2026 (orange) against the typical April range of FY23-25 (grey band, p10 to p90). The corruption ends where the orange line comes back into the band and stays there. The printed lines give the first day with a 3-day rolling ratio above 0.8 and the largest one-day jump.
+The figure shows the daily mean wind speed of April 2026 (orange) against the typical April range of FY23-25 (grey band, p10 to p90). The corruption ends where the orange line comes back into the band and stays there. The printed lines give the first day with a 3-day rolling ratio above 0.8 and the largest one-day jump.
 
 ```{python}
 # =============================================================================
@@ -951,16 +949,16 @@ for ax, stn in zip(axes, [89002, 86338]):
     ax.spines[['top', 'right']].set_visible(False)
 
 fig.tight_layout()
-add_titles(fig, 'Fig 6.1 – April 2026 daily mean wind speed vs reference band',
+add_titles(fig, 'Fig 6.1 - April 2026 daily mean wind speed vs reference band',
            'Detecting where the corruption ends: the day the series returns to the reference band')
 display(fig); plt.close(fig)
 ```
 
 ### 6.3 Extend QM to 1-14 April
 
-**What.** The same QM as in section 4, applied to 1-14 April 2026. The reference is the Aprils of FY23-25. Because it is a single month, the groups are the half-hour slots only, with smaller minimum group sizes.
+The same QM as in section 4, applied to 1-14 April 2026. The reference is the Aprils of FY23-25. Because it is a single month, the groups are the half-hour slots only, with smaller minimum group sizes.
 
-**How to read Table 6.3.** The mean and sd ratios against the April reference should move towards 1 after QM. After this cell, `hh['ws_<station>_qm']` is corrected from 7 Oct 2025 to 14 Apr 2026.
+The mean and sd ratios against the April reference should move towards 1 after QM. After this cell, `hh['ws_<station>_qm']` is corrected from 7 Oct 2025 to 14 Apr 2026.
 
 ```{python}
 # =============================================================================
@@ -1007,7 +1005,7 @@ for stn in [89002, 86338]:
                      'mean ratio before': orig_v.mean() / ref_v.mean(), 'mean ratio after': fixed_v.mean() / ref_v.mean(),
                      'sd ratio before': orig_v.std() / ref_v.std(), 'sd ratio after': fixed_v.std() / ref_v.std()})
 
-table_title('Table 6.3 – QM extended to 1-14 April 2026',
+table_title('Table 6.3 - QM extended to 1-14 April 2026',
             'Mean and sd ratios vs the April reference (FY23-25) should move towards 1')
 display(pd.DataFrame(ext_rows).set_index('station').round(3))
 print('Corruption window used from here on: 2025-10-07 -> 2026-04-14 23:30 '
@@ -1092,7 +1090,7 @@ print(f'  {len(df_wide):,} rows, {len(df_wide.columns)} columns')
 print(f'  QM window: {CORRUPT_START.date()} → {CORRUPT_END.date()} ({bad.sum():,} HH)')
 
 # ── (5) Quick check ──────────────────────────────────────────
-table_title('Table 7.1 – First rows of the saved QM file')
+table_title('Table 7.1 - First rows of the saved QM file')
 display(df_wide.head())
 
 print(f'\n═══ QM window: statistics ═══')
@@ -1108,9 +1106,9 @@ for stn in STATIONS:
 
 ### 8.1 Corrected wind speed vs the clean reference
 
-**What.** The distribution of the QM-corrected wind speed (7 Oct 2025 - 14 Apr 2026) against the clean Oct-Apr months of FY23-25, for each station.
+The distribution of the QM-corrected wind speed (7 Oct 2025 - 14 Apr 2026) against the clean Oct-Apr months of FY23-25, for each station.
 
-**How to read.** `Diff %` is the difference between the two columns. QM matches the reference by construction, so it should be small. A large value points to a month or slot that was skipped because it had too few points.
+`Diff %` is the difference between the two columns. QM matches the reference by construction, so it should be small. A large value points to a month or slot that was skipped because it had too few points.
 
 ```{python}
 # =============================================================================
@@ -1135,16 +1133,16 @@ for i, stn in enumerate([89002, 86338]):
                          ).loc[['mean', 'std', '10%', '50%', '90%']].round(2)
     stats.index = ['Mean', 'Std Dev', 'p10', 'p50', 'p90']
     stats['Diff %'] = ((stats['After QM'] - stats['Reference']) / stats['Reference'] * 100).round(1)
-    table_title(f'Table 8.1{"ab"[i]} – Station {stn}: QM-corrected vs reference wind speed (m/s)',
+    table_title(f'Table 8.1{"ab"[i]} - Station {stn}: QM-corrected vs reference wind speed (m/s)',
                 'Window 7 Oct 2025 - 14 Apr 2026 vs the clean Oct-Apr months of FY23-25')
     display(stats)
 ```
 
 ### 8.2 Full timeline
 
-**What.** Daily mean wind speed from Jul 2022 to Jun 2026 for each station: original data (orange) and QM-corrected data (blue). The shaded area is the corruption window.
+Daily mean wind speed from Jul 2022 to Jun 2026 for each station: original data (orange) and QM-corrected data (blue). The shaded area is the corruption window.
 
-**How to read.** Outside the shaded area the two lines are identical. Inside it, the orange line is flat and low, while the blue line has a normal spread.
+Outside the shaded area the two lines are identical. Inside it, the orange line is flat and low, while the blue line has a normal spread.
 
 ```{python}
 # =============================================================================
@@ -1182,7 +1180,7 @@ for ax, stn in zip(axes, [89002, 86338]):
 
 axes[1].tick_params(axis='x', rotation=30)
 fig.tight_layout()
-add_titles(fig, 'Fig 8.2 – Full dataset Jul 2022 – Jun 2026: original vs QM-corrected',
+add_titles(fig, 'Fig 8.2 - Full dataset Jul 2022 - Jun 2026: original vs QM-corrected',
            'Daily mean wind speed, corruption window shaded')
 display(fig); plt.close(fig)
 ```

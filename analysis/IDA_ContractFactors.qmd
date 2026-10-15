@@ -191,8 +191,7 @@ fig.tight_layout()
 w, s = cf_monthly['WIND_ContractFactor'], cf_monthly['SOLAR_ContractFactor']
 add_titles(fig, 'Fig 3.1 – Monthly price and portfolio contract factors',
            f'Wind CF ranges {w.min():.2f}-{w.max():.2f}, solar CF {s.min():.2f}-{s.max():.2f}')
-display(fig)
-plt.close(fig)
+plt.show()
 ```
 
 ### 3.2 Contract factor of each asset
@@ -216,8 +215,7 @@ fig.tight_layout()
 n_gap = int(cf_monthly[[f'{a}_ContractFactor' for a in all_assets]].isna().sum().sum())
 add_titles(fig, 'Fig 3.2 – Monthly contract factor by asset',
            f'{n_gap} asset-months have no value (gaps in the lines); see the exclusion periods in §5.2')
-display(fig)
-plt.close(fig)
+plt.show()
 ```
 
 ## 4. Min / max check
@@ -407,8 +405,7 @@ longest = excl.loc[(excl['ExclusionEnd'] - excl['ExclusionStart']).idxmax()]
 add_titles(fig, 'Fig 5.1 – Availability and exclusion periods by asset',
            f'{len(excl)} exclusion period(s) in the table; the longest is {longest["DUID"]} '
            f'({(longest["ExclusionEnd"] - longest["ExclusionStart"]).days} days)')
-display(fig)
-plt.close(fig)
+plt.show()
 
 # Months with no or partial data: expected when an asset is excluded or not yet online
 expected_hh = cf_monthly.index.days_in_month * 48                   # half-hours in each month
@@ -520,8 +517,7 @@ display(out.round(1))
 fig = plot_exclusion_share(share_tbl, cfg['wind_assets'], cfg['solar_assets'])
 add_titles(fig, 'Fig 5.2 – Share of online time in exclusion, by group',
            f'Largest total: {out["Total excluded"].idxmax()} with {out["Total excluded"].max():.1f}% of its online days')
-display(fig)
-plt.close(fig)
+plt.show()
 ```
 
 ### 5.4 Outliers

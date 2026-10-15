@@ -276,9 +276,9 @@ Before fixing anything, show that the data is really wrong. A time plot (2.1) sh
 
 ### 2.1 Wind speed vs wind generation over time
 
-Monthly mean wind speed at station 89002 (blue line) against the range seen in the same calendar month in earlier years (blue band). The green dashed line is the wind fleet capacity factor (generation / capacity). The red area is the corrupted period.
+Monthly mean wind speed at station 89002 (purple line) against the range seen in the same calendar month in earlier years (purple band). The orange line is the wind fleet capacity factor (generation / capacity). The grey area is the corrupted period.
 
-If the blue line leaves the band inside the red area while the green line stays normal, the farms produced as usual but the sensor says it was calm. The sensor is wrong, not the weather.
+If the purple line leaves the band inside the grey area while the orange line stays normal, the farms produced as usual but the sensor says it was calm. The sensor is wrong, not the weather.
 
 ```{python}
 # =============================================================================
@@ -299,18 +299,17 @@ cf_wind_monthly = cf_wind_hh.resample('ME').mean()
 fig, ax = plt.subplots(figsize=(14, 4))
 band_min = band['min'].reindex(ws_monthly.index.month).values
 band_max = band['max'].reindex(ws_monthly.index.month).values
-ax.fill_between(ws_monthly.index, band_min, band_max, alpha=0.2, label='Historical range (same month)')
-ax.plot(ws_monthly, 'b-o', ms=3, label='Mean wind stn 89002 (m/s)')
-ax.axvspan(pd.Timestamp('2025-10-01'), pd.Timestamp('2026-03-31'), color='red', alpha=0.08, label='Corruption period')
+ax.fill_between(ws_monthly.index, band_min, band_max, color=BLUE, alpha=0.15, label='Historical range (same month)')
+ax.plot(ws_monthly, '-o', color=BLUE, ms=3, label='Mean wind stn 89002 (m/s)')
+ax.axvspan(pd.Timestamp('2025-10-01'), pd.Timestamp('2026-03-31'), color=GREY, alpha=0.15, label='Corruption period')
 ax2 = ax.twinx()
-ax2.plot(cf_wind_monthly, 'g--', alpha=0.7, label='Wind fleet capacity factor')
+ax2.plot(cf_wind_monthly, color=ORANGE, lw=1.6, label='Wind fleet capacity factor')
 ax.legend(loc='upper left'); ax2.legend(loc='upper right')
 ax.set_ylabel('Wind (m/s)'); ax2.set_ylabel('Capacity Factor')
 fig.tight_layout()
 add_titles(fig, 'Fig 2.1 - Monthly mean wind speed (station 89002) vs wind fleet capacity factor',
            'Measured wind drops sharply while generation stays normal → the weather data is wrong, not the weather')
-display(fig)
-plt.close(fig)
+plt.show()
 ```
 
 ### 2.2 How much is the link between wind speed and generation damaged?
@@ -405,8 +404,8 @@ cap_wind_total = sum(vret_capacity[a] for a in cfg['wind_assets'])
 cf_wind_hh = gen_wind / (0.5 * cap_wind_total)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25)', 'steelblue'),
-                                             (bad, 'Corrupted period (Oct25-Mar26)', 'crimson')]):
+for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25)', BLUE),
+                                             (bad, 'Corrupted period (Oct25-Mar26)', ORANGE)]):
     d = pd.DataFrame({'ws': ws_A[mask], 'cf': cf_wind_hh[mask]}).dropna()
     ax.scatter(d['ws'], d['cf'], s=1, alpha=0.05, color=color)
     # Median line per 0.1 m/s bin
@@ -421,8 +420,7 @@ axes[0].set_ylabel('Wind fleet CF (half-hourly)')
 fig.tight_layout()
 add_titles(fig, 'Fig 3.1 - Wind speed vs wind fleet CF: reference vs corrupted period',
            'Check (1), monotonic? If the corrupted-period median still rises steadily, QM is feasible')
-display(fig)
-plt.close(fig)
+plt.show()
 ```
 
 ### 3.2 Is the squashing similar in every month?
@@ -476,7 +474,7 @@ else:
 
 The squashing does not start on 1 October (the October ratio in 3.2 is close to 1), so this step finds the first bad day. Each day of October 2025 is compared with the average daily mean and sd of earlier Octobers. The first day with a very low mean (below 50% of the reference) or a very low sd (below 40%) is flagged.
 
-The printed table shows the days around the start, with the verdict per day. In Fig 3.3 the rolling 24h mean (top) and sd (bottom) fall at the red line. That date is the start of the QM window used from section 4 on.
+The printed table shows the days around the start, with the verdict per day. In Fig 3.3 the rolling 24h mean (top) and sd (bottom) fall at the orange line. That date is the start of the QM window used from section 4 on.
 
 ```{python}
 # =============================================================================
@@ -537,28 +535,27 @@ roll_mean = oct25.rolling(48, center=True).mean()
 roll_sd   = oct25.rolling(48, center=True).std()
 
 axes[0].plot(oct25.index, oct25.values, alpha=0.3, lw=0.5, color='grey', label='HH values')
-axes[0].plot(roll_mean.index, roll_mean.values, 'b-', lw=1.5, label='Rolling mean (24h)')
-axes[0].axhline(ref_daily_mean, color='green', ls='--', alpha=0.7, label=f'Reference mean = {ref_daily_mean:.1f}')
-axes[0].axhline(ref_daily_mean * 0.5, color='red', ls=':', alpha=0.7, label='50% mean threshold')
+axes[0].plot(roll_mean.index, roll_mean.values, '-', color=BLUE, lw=1.5, label='Rolling mean (24h)')
+axes[0].axhline(ref_daily_mean, color=GREY, ls='--', label=f'Reference mean = {ref_daily_mean:.1f}')
+axes[0].axhline(ref_daily_mean * 0.5, color=ORANGE, ls=':', label='50% mean threshold')
 if first_bad_day:
-    axes[0].axvline(first_bad_day, color='red', lw=2, alpha=0.7, label=f'Corruption start: {first_bad_day.strftime("%d/%m")}')
+    axes[0].axvline(first_bad_day, color=ORANGE, lw=2, label=f'Corruption start: {first_bad_day.strftime("%d/%m")}')
 axes[0].set_ylabel('Wind speed (m/s)')
 axes[0].legend(fontsize=7, ncol=3)
 
-axes[1].plot(roll_sd.index, roll_sd.values, 'b-', lw=1.5, label='Rolling sd (24h)')
-axes[1].axhline(ref_daily_sd, color='green', ls='--', alpha=0.7, label=f'Reference sd = {ref_daily_sd:.1f}')
-axes[1].axhline(ref_daily_sd * 0.4, color='red', ls=':', alpha=0.7, label='40% sd threshold')
+axes[1].plot(roll_sd.index, roll_sd.values, '-', color=BLUE, lw=1.5, label='Rolling sd (24h)')
+axes[1].axhline(ref_daily_sd, color=GREY, ls='--', label=f'Reference sd = {ref_daily_sd:.1f}')
+axes[1].axhline(ref_daily_sd * 0.4, color=ORANGE, ls=':', label='40% sd threshold')
 if first_bad_day:
-    axes[1].axvline(first_bad_day, color='red', lw=2, alpha=0.7)
+    axes[1].axvline(first_bad_day, color=ORANGE, lw=2)
 axes[1].set_ylabel('Standard deviation (m/s)')
 axes[1].set_xlabel('Day')
 axes[1].legend(fontsize=7)
 
 fig.tight_layout()
 add_titles(fig, 'Fig 3.3 - Locating the corruption start day (October 2025, station 89002)',
-           'Rolling 24h mean and sd fall sharply on the first corrupted day (red line)')
-display(fig)
-plt.close(fig)
+           'Rolling 24h mean and sd fall sharply on the first corrupted day (orange line)')
+plt.show()
 
 # ── (c) Summary ──
 if first_bad_day:
@@ -586,9 +583,9 @@ Only weather data is used, no generation, so nothing from the target leaks in. T
 
 **How to read the figure.**
 
-- *Left, distribution:* after QM the green histogram should sit on the blue one (reference), not on the red one.
-- *Middle, Oct-Nov 2025:* the green line should no longer drop at 7 Oct.
-- *Right, scatter:* the green points should cover the same cloud as the blue ones.
+- *Left, distribution:* after QM the purple histogram should sit on the grey one (reference), not on the orange one (before QM).
+- *Middle, Oct-Nov 2025:* the purple line (after QM) should no longer drop at 7 Oct, unlike the orange line (before QM).
+- *Right, scatter:* the purple points should cover the same cloud as the grey ones.
 
 **Why Pearson barely moves (last table).** QM keeps the order of the values, so the correlation hardly changes. The amplitude is checked directly in section 5.
 
@@ -647,33 +644,34 @@ for i, stn in enumerate(STATIONS):
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
 
     # (i) Wind speed distributions: reference vs corrupted vs QM-corrected
-    for data, label, color in [(ws[ref].dropna(), 'Reference', 'steelblue'),
-                               (ws[bad].dropna(), 'Before QM', 'crimson'),
-                               (ws_fixed[bad].dropna(), 'QM-corrected', 'forestgreen')]:
+    for data, label, color in [(ws[ref].dropna(), 'Reference', GREY),
+                               (ws[bad].dropna(), 'Before QM', ORANGE),
+                               (ws_fixed[bad].dropna(), 'QM-corrected', BLUE)]:
         axes[0].hist(data, bins=60, alpha=0.35, density=True, color=color, label=label)
     axes[0].set_xlabel('Wind speed (m/s)'); axes[0].set_title('Distribution')
     axes[0].legend(fontsize=7)
 
     # (ii) Oct-Nov 2025 time series: clear jump at 07/10
     ts_mask = (idx >= '2025-10-01') & (idx < '2025-11-15')
-    axes[1].plot(ws[ts_mask], alpha=0.4, color='crimson', lw=0.5, label='Before QM')
-    axes[1].plot(ws_fixed[ts_mask], alpha=0.7, color='forestgreen', lw=0.5, label='QM-corrected')
-    axes[1].axvline(CORRUPT_START, color='red', lw=2, ls='--', alpha=0.7, label='07/10')
+    axes[1].plot(ws[ts_mask], alpha=0.6, color=ORANGE, lw=0.5, label='Before QM')
+    axes[1].plot(ws_fixed[ts_mask], alpha=0.8, color=BLUE, lw=0.5, label='QM-corrected')
+    axes[1].axvline(CORRUPT_START, color=GREY, lw=2, ls='--', label='07/10')
     axes[1].set_title('Time series Oct-Nov 2025')
     axes[1].legend(fontsize=7); axes[1].set_ylabel('m/s')
 
     # (iii) Generation vs wind speed: QM-corrected points should overlap the reference cloud
-    axes[2].scatter(d_ref['ws'], d_ref['gen'], s=1, alpha=0.03, color='steelblue', label='Reference')
-    axes[2].scatter(d_fixed['ws'], d_fixed['gen'], s=1, alpha=0.05, color='forestgreen', label='QM-corrected')
+    axes[2].scatter(d_ref['ws'], d_ref['gen'], s=1, alpha=0.03, color=GREY, label='Reference')
+    axes[2].scatter(d_fixed['ws'], d_fixed['gen'], s=1, alpha=0.05, color=BLUE, label='QM-corrected')
     axes[2].set_xlabel('Wind speed (m/s)'); axes[2].set_ylabel('Wind generation (MWh)')
-    axes[2].set_title('Scatter after QM (green) vs reference (blue)')
-    axes[2].legend(fontsize=7, markerscale=10)
+    axes[2].set_title('Scatter after QM (purple) vs reference (grey)')
+    leg = axes[2].legend(fontsize=7, markerscale=10)
+    for h in getattr(leg, 'legend_handles', getattr(leg, 'legendHandles', [])):
+        h.set_alpha(1)                                          # the points are very faint; show them solid in the legend
 
     fig.tight_layout()
     add_titles(fig, f'Fig 4.1{"ab"[i]} - Quantile mapping validation, station {stn}',
                'After QM, the distribution and the generation scatter should overlap the clean reference')
-    display(fig)
-    plt.close(fig)
+    plt.show()
 
 table_title('Table 4.1c - QM summary and Pearson check (wind speed vs wind generation)',
             'Pearson barely moves because QM keeps ranks; the amplitude is checked directly in §5')
@@ -684,7 +682,7 @@ display(pd.DataFrame(summary_rows).set_index('station').round(3))
 
 Pearson cannot tell squashed data from corrected data, so the amplitude is checked directly, using wind speed only. Two tests:
 
-- **5.1** compares the corrected data with the clean reference, month by month.
+- **5.1** compares the corrected data with the clean reference, month by month (as in the first check of the original analysis).
 - **5.2** corrupts clean winters ourselves, where the true answer is known, and checks that QM gets back close to it.
 
 ### 5.1 Corrected data vs the clean reference, month by month
@@ -694,7 +692,12 @@ For each station and each month of the window, the wind speed is compared with t
 - *mean ratio* and *sd ratio*: 1 means the same as the reference.
 - *KS distance*: largest gap between the two distributions, 0 means identical.
 
-From red (before) to green (after), the ratios should move from below 1 to about 1 and the KS distance should fall towards 0. A month where green is still far from 1 is a month QM could not fix.
+**How to read Fig 5.1** (one row per station).
+
+- *Left:* monthly sd of the wind speed (m/s). Orange bars = before QM, purple bars = after QM, black diamonds = the clean reference of the same month. After QM the purple bar should reach the diamond.
+- *Right:* distance between the monthly sd and the reference. Purple (after QM) should be below orange (before QM). A month where purple stays high is a month QM could not fix.
+
+In the tables the ratios should move from below 1 to about 1 and the KS distance should fall towards 0.
 
 **Limit.** This checks the *distribution* (level and spread). QM does not restore the exact timing of each half-hour: it keeps the order that DTN gave, and Table 2.2 (Spearman) showed that this order is still informative.
 
@@ -713,10 +716,10 @@ bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
 ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 MONTHS = [10, 11, 12, 1, 2, 3]
 
-check = {}
+check, sd_ref = {}, {}
 for i, stn in enumerate(STATIONS):
     ws, ws_qm = hh[f'ws_{stn}'], hh[f'ws_{stn}_qm']
-    rows = []
+    rows, sd_r = [], []
     for m in MONTHS:
         r = ws[ref & (idx.month == m)].dropna()
         b = ws[bad & (idx.month == m)].dropna()
@@ -725,36 +728,49 @@ for i, stn in enumerate(STATIONS):
                      'mean ratio before': b.mean() / r.mean(), 'mean ratio after': q.mean() / r.mean(),
                      'sd ratio before': b.std() / r.std(), 'sd ratio after': q.std() / r.std(),
                      'KS before': ks_2samp(b, r).statistic, 'KS after': ks_2samp(q, r).statistic})
+        sd_r.append(r.std())
     check[stn] = pd.DataFrame(rows).set_index('month')
+    sd_ref[stn] = pd.Series(sd_r, index=check[stn].index)       # reference sd (m/s) per month, for the figure
     table_title(f'Table 5.1{"ab"[i]} - Station {stn}: wind speed vs the clean reference, before and after QM',
                 'Ratios: 1 = same as the reference. KS distance: 0 = identical distribution')
     display(check[stn].round(3))
 
-# Figure: before (red) vs after (green) for each measure
-measures = [('sd ratio', 'sd ratio (1 = reference)', 1), ('mean ratio', 'mean ratio (1 = reference)', 1),
-            ('KS', 'KS distance (0 = identical)', 0)]
-fig, axes = plt.subplots(2, 3, figsize=(16, 7))
+# Figure: monthly sd before / after QM vs the clean reference (one row per station)
+fig, axes = plt.subplots(2, 2, figsize=(14, 8))
 x = np.arange(len(MONTHS))
+gap = {}                                                       # mean |sd - reference sd| (m/s), before and after QM
 for r_i, stn in enumerate(STATIONS):
-    for c_i, (col, ylabel, target) in enumerate(measures):
-        ax = axes[r_i, c_i]
-        ax.bar(x - 0.2, check[stn][f'{col} before'], 0.4, color='crimson', alpha=0.7, label='Before QM')
-        ax.bar(x + 0.2, check[stn][f'{col} after'], 0.4, color='forestgreen', alpha=0.7, label='After QM')
-        ax.axhline(target, color='black', lw=0.8, ls='--')
+    c = check[stn]
+    sd_before, sd_after, sd_r = c['sd ratio before'] * sd_ref[stn], c['sd ratio after'] * sd_ref[stn], sd_ref[stn]
+    gap[stn] = ((sd_before - sd_r).abs().mean(), (sd_after - sd_r).abs().mean())
+
+    # Left: monthly sd, before and after QM, with the reference as diamonds
+    ax = axes[r_i, 0]
+    ax.bar(x - 0.2, sd_before, 0.4, color=ORANGE, alpha=0.85, label='Before QM')
+    ax.bar(x + 0.2, sd_after, 0.4, color=BLUE, alpha=0.85, label='After QM')
+    ax.scatter(x, sd_r, s=60, color='black', marker='D', zorder=5, label='Clean reference (FY23-25)')
+    ax.set_ylabel('Monthly sd (m/s)')
+    ax.set_ylim(0, max(sd_before.max(), sd_after.max(), sd_r.max()) * 1.3)      # headroom for the legend
+    ax.set_title(f'Station {stn}: monthly sd', loc='left', fontsize=10)
+
+    # Right: distance to the reference
+    ax = axes[r_i, 1]
+    ax.plot(x, (sd_before - sd_r).abs(), 'o-', color=ORANGE, label='Before QM')
+    ax.plot(x, (sd_after - sd_r).abs(), 'o-', color=BLUE, label='After QM')
+    ax.axhline(0, color='black', lw=0.5)
+    ax.set_ylabel('|monthly sd - reference sd| (m/s)')
+    ax.set_ylim(0, max((sd_before - sd_r).abs().max(), (sd_after - sd_r).abs().max()) * 1.3)   # headroom for the legend
+    ax.set_title(f'Station {stn}: distance to the reference', loc='left', fontsize=10)
+
+    for ax in axes[r_i]:
         ax.set_xticks(x); ax.set_xticklabels(check[stn].index)
-        ax.set_ylabel(ylabel)
-        ax.set_title(f'Station {stn}', loc='left', fontsize=10)
+        ax.legend(loc='upper right', frameon=False, fontsize=8, ncol=3 if ax is axes[r_i, 0] else 1)
         ax.spines[['top', 'right']].set_visible(False)
-        if r_i == 0 and c_i == 0:
-            ax.legend(frameon=False, fontsize=8)
 fig.tight_layout()
-sdb = {s: check[s]['sd ratio before'].mean() for s in STATIONS}
-sda = {s: check[s]['sd ratio after'].mean() for s in STATIONS}
-add_titles(fig, 'Fig 5.1 - Wind speed vs the clean reference: before and after QM',
-           f'Average sd ratio {sdb[89002]:.2f} to {sda[89002]:.2f} (station 89002) and '
-           f'{sdb[86338]:.2f} to {sda[86338]:.2f} (station 86338); 1 = same as reference')
-display(fig)
-plt.close(fig)
+add_titles(fig, 'Fig 5.1 - Wind speed spread vs the clean reference: before and after QM',
+           f'Mean gap to the reference sd falls from {gap[89002][0]:.2f} to {gap[89002][1]:.2f} m/s (station 89002) and '
+           f'from {gap[86338][0]:.2f} to {gap[86338][1]:.2f} m/s (station 86338)')
+plt.show()
 ```
 
 ### 5.2 Simulation on clean winters: can QM undo a corruption we make ourselves?
@@ -772,7 +788,7 @@ A test where we know the right answer.
 - *KS distance*: gap between the distribution of the month and the true distribution. 0 means identical.
 - *Recovery (%)*: share of the error that QM removes. 100% is perfect, 0% means no help.
 
-Left panels: the monthly sd. Red (squashed) sits below the blue truth, and green (QM) should be back close to blue. Right panels: the KS distance to the truth, where green should be well below red. We do not score half-hour by half-hour errors: QM restores the *size* of the values, not their exact timing, so that measure would punish it unfairly.
+**How to read Fig 5.2.** One row per station, one column per simulated winter. Each bar is the error of the monthly sd (m/s) for one month: orange = the squashed data without QM, purple = after QM. Purple should be much lower than orange. The KS distance and the mean error are in Table 5.2. We do not score half-hour by half-hour errors: QM restores the *size* of the values, not their exact timing, so that measure would punish it unfairly.
 
 ```{python}
 # =============================================================================
@@ -808,25 +824,16 @@ for r_i, stn in enumerate(STATIONS):
 
     df_sim = simulate_qm_recovery(ws, sd_ratios, sim_windows, real_ref)
     sim_res[stn] = df_sim
-    x = np.arange(len(df_sim))
-
-    # Left: monthly sd of the truth, the squashed data and the QM result
-    ax = axes[r_i, 0]
-    ax.plot(x, df_sim['sd_true'], 'o-', color=BLUE, label='Truth (clean)')
-    ax.plot(x, df_sim['sd_squashed'], 'o-', color='crimson', label='Squashed (fake corruption)')
-    ax.plot(x, df_sim['sd_qm'], 'o-', color='forestgreen', label='After QM')
-    ax.set_ylabel('Monthly sd (m/s)')
-    ax.set_title(f'Station {stn}: monthly sd', loc='left', fontsize=10)
-
-    # Right: gap between the distribution and the truth
-    ax = axes[r_i, 1]
-    ax.bar(x - 0.2, df_sim['ks_squashed'], 0.4, color='crimson', alpha=0.7, label='Squashed (no QM)')
-    ax.bar(x + 0.2, df_sim['ks_qm'], 0.4, color='forestgreen', alpha=0.7, label='After QM')
-    ax.set_ylabel('KS distance to the truth (0 = identical)')
-    ax.set_title(f'Station {stn}: distribution gap', loc='left', fontsize=10)
-
-    for ax in axes[r_i]:
-        ax.set_xticks(x); ax.set_xticklabels(df_sim['month'], rotation=45, fontsize=8)
+    # One panel per simulated winter: error of the monthly sd, squashed vs after QM
+    for c_i, (sim, d) in enumerate(df_sim.groupby('sim', sort=False)):
+        ax = axes[r_i, c_i]
+        x = np.arange(len(d))
+        ax.bar(x - 0.2, d['sd_err_squashed'], 0.4, color=ORANGE, alpha=0.85, label='Squashed (no QM)')
+        ax.bar(x + 0.2, d['sd_err_qm'], 0.4, color=BLUE, alpha=0.85, label='After QM')
+        ax.set_xticks(x); ax.set_xticklabels(d['month'], rotation=45, fontsize=8)
+        ax.set_ylabel('|monthly sd - true sd| (m/s)')
+        ax.set_title(f'Station {stn}, {sim}\nMean error: squashed = {d["sd_err_squashed"].mean():.2f}, '
+                     f'QM = {d["sd_err_qm"].mean():.2f} m/s', fontsize=9)
         ax.legend(frameon=False, fontsize=8)
         ax.spines[['top', 'right']].set_visible(False)
 
@@ -843,10 +850,9 @@ rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in STATIONS for l, 
 
 fig.tight_layout()
 add_titles(fig, 'Fig 5.2 - Simulation on clean winters: how close does QM get to the truth?',
-           f'QM removes {rec[(89002, "sd_err")]:.0f}% / {rec[(86338, "sd_err")]:.0f}% of the monthly sd error and '
-           f'{rec[(89002, "ks")]:.0f}% / {rec[(86338, "ks")]:.0f}% of the distribution gap (stations 89002 / 86338)')
-display(fig)
-plt.close(fig)
+           f'QM removes {rec[(89002, "sd_err")]:.0f}% / {rec[(86338, "sd_err")]:.0f}% of the monthly sd error '
+           f'(stations 89002 / 86338)')
+plt.show()
 
 table_title('Table 5.2 - Simulation summary: error before and after QM',
             'Average over the 12 simulated months; Recovery = share of the error QM removes (100% = perfect)')
@@ -951,7 +957,7 @@ for ax, stn in zip(axes, [89002, 86338]):
 fig.tight_layout()
 add_titles(fig, 'Fig 6.1 - April 2026 daily mean wind speed vs reference band',
            'Detecting where the corruption ends: the day the series returns to the reference band')
-display(fig); plt.close(fig)
+plt.show()
 ```
 
 ### 6.3 Extend QM to 1-14 April
@@ -1140,22 +1146,22 @@ for i, stn in enumerate([89002, 86338]):
 
 ### 8.2 Full timeline
 
-Daily mean wind speed from Jul 2022 to Jun 2026 for each station: original data (orange) and QM-corrected data (blue). The shaded area is the corruption window.
+Daily mean wind speed from Jul 2022 to Jun 2026 for each station: original data (orange) and QM-corrected data (purple). The shaded area is the corruption window.
 
-Outside the shaded area the two lines are identical. Inside it, the orange line is flat and low, while the blue line has a normal spread.
+Outside the shaded area the two lines are identical. Inside it, the orange line is flat and low, while the purple line has a normal spread.
 
 ```{python}
 # =============================================================================
 # CELL 8.2 -- Full timeline, original vs production (QM-corrected)
 # Daily mean wind speed over Jul 2022 - Jun 2026, with the corruption window shaded.
+# One shared legend at the bottom of the figure.
 # =============================================================================
-
 
 idx = hh.index
 bad_mask = (idx >= '2025-10-07') & (idx <= '2026-04-14 23:30:00')   # full corruption window
 _assets = {89002: 'DUNDWF3, BRYB1WF1, BULGANA1', 86338: 'MRTLSWF1'}
 
-fig, axes = plt.subplots(2, 1, figsize=(16, 7))
+fig, axes = plt.subplots(2, 1, figsize=(16, 7.5))
 
 for ax, stn in zip(axes, [89002, 86338]):
     ws_orig = hh[f'ws_{stn}']
@@ -1175,12 +1181,18 @@ for ax, stn in zip(axes, [89002, 86338]):
 
     ax.set(ylabel='Wind speed (m/s, daily mean)')
     ax.set_title(f'Station {stn} ({_assets[stn]})', loc='left', fontsize=10)
-    ax.legend(frameon=False, fontsize=8, loc='upper right', ncol=3)
     ax.spines[['top', 'right']].set_visible(False)
 
 axes[1].tick_params(axis='x', rotation=30)
-fig.tight_layout()
+
+# One legend for both panels (same labels), placed below the plots
+handles, labels = axes[0].get_legend_handles_labels()
+fig.tight_layout(rect=(0, 0.05, 1, 1))                      # keep a strip at the bottom for the legend
+leg = fig.legend(handles, labels, loc='lower center', ncol=3, frameon=False, fontsize=9)
+for h in leg.legend_handles[:2]:                            # only the legend copies: thicker, solid lines (plots unchanged)
+    h.set_linewidth(2)
+    h.set_alpha(1)
 add_titles(fig, 'Fig 8.2 - Full dataset Jul 2022 - Jun 2026: original vs QM-corrected',
            'Daily mean wind speed, corruption window shaded')
-display(fig); plt.close(fig)
+plt.show()
 ```

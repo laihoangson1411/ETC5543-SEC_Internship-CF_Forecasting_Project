@@ -6,11 +6,11 @@ execute:
 format:
   html:
     toc: true
-    code-fold: true          # code is collapsed under a "Code" toggle
+    code-fold: true          
     code-overflow: wrap
     embed-resources: true
     grid:
-      body-width: 1100px   # wider text column so the large figures stay readable
+      body-width: 1100px   
       margin-width: 250px
     include-in-header:
       text: |
@@ -20,30 +20,41 @@ format:
         </style>
 ---
 
-**Problem.** DTN wind speed is corrupted from 7 Oct 2025 to 14 Apr 2026: the values are squashed (smaller amplitude, smoother) while the wind farms keep generating normally. Using the raw data would understate wind and break the wind proxy.
+**Problem.** DTN wind speed is corrupted from 7 Oct 2025 to 14 Apr 2026: the values are squashed (smaller swings, smoother) while the wind farms keep generating normally. Any model that uses this weather as an input would think the wind was weak.
 
-**Fix.** Quantile mapping per station. In the corrupted window, each half-hour keeps its *rank* but takes the *value* that rank has in clean reference years (same month and half-hour slot, FY23-25).
+**Fix.** Quantile mapping (QM) per station. Inside the corrupted window, each half-hour keeps its *rank* (is it a windy or a calm half-hour compared with its neighbours?) but takes the *value* that this rank has in clean reference years.
+
+**Key terms**
+
+| Term | Meaning |
+|---|---|
+| Corrupted window | 7 Oct 2025 to 14 Apr 2026, the period where DTN wind speed is wrong |
+| Reference | Clean years FY23-25, same calendar months as the period we check or fix |
+| Slot | One of the 48 half-hours of a day. QM runs separately for every (month, slot) group, so the day/night pattern is kept |
+| Squashing ratio | sd of corrupted data / sd of reference. 1 = normal, below 1 = squashed |
 
 **Flow**
-1. Set-up: load data (from `utilsData`), build the half-hourly (`hh`) and monthly (`mo`) tables, QM helper functions
 
-2. Evidence that the data is corrupted
-
-3. Is QM feasible, and when does the corruption start?
-
-4. QM for stations 89002 and 86338
-
-5. Validation: proxy CF vs actual CF, and a simulation on clean winters
-
-6. Extend the correction to 1-14 April
-
-7. Save the corrected weather file
-
-8. Summary figures
+| Step | Question | Section |
+|---|---|---|
+| 1 | Load the data and build the tables and helper functions | 1 |
+| 2 | Is the weather data really wrong? | 2 |
+| 3 | Can QM fix it, and when does the corruption start? | 3 |
+| 4 | Apply QM (stations 89002 and 86338) | 4 |
+| 5 | Did QM bring back the right amplitude? (wind speed only) | 5 |
+| 6 | Where does the corruption end (April)? Extend QM there | 6 |
+| 7 | Save the corrected weather file | 7 |
+| 8 | Summary figures | 8 |
 
 **Output:** `data/processed/QM_HistoricWeather_30min.csv`.
 
 ## 1. Set-up
+
+Loads the data and prepares the tables and helper functions that every later step uses. Nothing is plotted here.
+
+### 1.1 Load the data
+
+Imports, the configuration `cfg` (analysis window, wind farms, weather stations) and the loading functions from `utilsData`. We load the **raw** DTN wind speed (`apply_qm=False`) because this file is the one that creates the corrected version.
 
 ```{python}
 # =============================================================================
@@ -71,7 +82,7 @@ ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
             if os.path.isdir(os.path.join(p, 'functions')))
 sys.path.append(os.path.join(ROOT, 'functions'))
 
-from utilsData import load_generation_inputs, load_weather_history, build_targets, _to_naive_timestamp
+from utilsData import load_generation_inputs, load_weather_history, _to_naive_timestamp
 
 DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
 
@@ -97,48 +108,32 @@ print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {w
 print(f'Period: {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
 ```
 
+### 1.2 Build the half-hourly table `hh`
+
+`hh` is the main table of this file: one row per half-hour with the generation of each wind farm (`gen_*`), the fleet total (`gen_wind`) and the wind speed of each station (`ws_<station>`, in m/s). Later cells add the corrected columns `ws_<station>_qm`.
+
 ```{python}
 # =============================================================================
-# CELL 1.2 -- Build the half-hourly (hh) and monthly (mo) tables
-# proxy_func  proxy CF: same formula as the contract factor with the generation replaced by X_t
-# hh          half-hourly: price, wind generation, wind speed (m/s) per station
-# mo          monthly: contract factors from utilsData.build_targets (CF_WIND = fleet CF)
-# lut_data    power-curve lookup per wind farm (median CF per 0.1 m/s bin, clean data only)
+# CELL 1.2 -- Build the half-hourly table (hh)
+# hh   half-hourly: wind generation of each farm, fleet total and wind speed (m/s) per station
 # =============================================================================
 
 
-def proxy_func(x, p):
-    """Proxy: same formula as CF, replacing generation with X_t."""
-    return (x * p.clip(lower=0)).sum() / x.sum() / p.mean() if x.sum() > 0 else np.nan
-
-# === Half-hourly table hh ===
-hh = gen_scaled[['VIC1Price'] + cfg['wind_assets']].copy()
-hh.columns = ['price'] + [f'gen_{a}' for a in cfg['wind_assets']]
+hh = gen_scaled[cfg['wind_assets']].copy()
+hh.columns = [f'gen_{a}' for a in cfg['wind_assets']]
 for stn in cfg['station_ids']:
     hh[f'ws_{stn}'] = weather_hh[f'wind_speed_ms_{stn}']
 hh['gen_wind'] = hh[[f'gen_{a}' for a in cfg['wind_assets']]].sum(axis=1, min_count=1)
 
-# === Power-curve lookup tables: median actual CF per 0.1 m/s wind-speed bin ===
-# Built from clean data only (the corruption period is excluded)
-# Note: BULGANA1 lookup bakes in battery dispatch (charge/discharge pattern)
-_corruption_range = ('2025-10-01', '2026-03-31')
-lut_data = {}  # {asset: (ws_array, power_array)}
-for a in cfg['wind_assets']:
-    stn = cfg['nearest_station_by_asset'][a]
-    _d = pd.DataFrame({'v': hh[f'ws_{stn}'],
-                       'cf': hh[f'gen_{a}'] / (0.5 * vret_capacity[a])}).dropna()
-    _clean = _d[~_d.index.to_series().between(*_corruption_range)]
-    _bins = _clean.groupby(_clean['v'].round(1))['cf'].median()
-    _bins = _bins[(_bins.index >= 0) & (_bins.index <= 22)]
-    lut_data[a] = (_bins.index.values, _bins.values)
-
-# === Monthly table mo ===
-mo = build_targets(gen_scaled, cfg, vret_capacity)
-mo['CF_WIND'] = mo['WIND_ContractFactor']
-
-print(f'hh: {hh.shape}, mo: {mo.shape}')
+print(f'hh: {hh.shape}')
 print('Capacity (MW):', {k: round(float(v), 1) for k, v in vret_capacity.items()})
 ```
+
+### 1.3 Helper functions
+
+- `qmap` and `apply_qm` are the correction itself. Read `qmap` first: it is the whole idea of QM in a few lines.
+- `real_sd_ratios` and `simulate_qm_recovery` are used by the validation in section 5.
+- `add_titles` and `table_title` only format figure titles and table captions.
 
 ```{python}
 # =============================================================================
@@ -146,16 +141,14 @@ print('Capacity (MW):', {k: round(float(v), 1) for k, v in vret_capacity.items()
 # Used by the QM and validation cells below:
 #   qmap                  map corrupted values onto a reference distribution, keeping their rank
 #   apply_qm              qmap applied group by group (calendar month x half-hour slot)
-#   lut_cf                wind speed -> CF through a power-curve lookup table
-#   lut_for_station       power curve used to test each station
-#   climatology_ws        placebo wind speed built from clean-year averages
 #   real_sd_ratios        measured squashing (sd corrupted / sd reference) per month
-#   proxy_by_month        monthly proxy CF of several wind-speed versions vs the actual CF
 #   simulate_qm_recovery  corrupt clean winters ourselves and measure how much QM recovers
 #   add_titles, table_title  figure title + insight subtitle, table caption
 # =============================================================================
 
-from scipy.stats import rankdata
+
+from scipy.stats import rankdata, ks_2samp
+import calendar
 
 def qmap(bad_vals, ref_vals):
     """Map corrupted values onto the reference distribution, preserving rank order."""
@@ -194,29 +187,6 @@ def apply_qm(ws_bad, ws_all, ref_mask, min_bad=20, min_ref=50):
     return out, n_mapped, skipped
 
 
-def lut_cf(ws, lut):
-    """CF (0-1) from wind speed through a power-curve lookup table (ws_array, power_array)."""
-    lut_ws, lut_pw = lut
-    return pd.Series(np.clip(np.interp(ws.values, lut_ws, lut_pw), 0, 1), index=ws.index)
-
-
-def climatology_ws(ws, lut, bad, ref):
-    """Placebo wind speed: corrupted half-hours get the wind speed whose CF equals the
-    average CF of the same (month, slot) in the reference years; clean half-hours are kept.
-
-    It uses no real weather information, so it shows what 'no information' scores.
-    """
-    idx = ws.index
-    slot = idx.hour * 2 + idx.minute // 30
-    lut_ws, lut_pw = lut
-    fv_ref = lut_cf(ws[ref], lut)
-    clim_lookup = fv_ref.groupby([idx[ref].month, slot[ref]]).mean()
-    out = ws.copy()
-    clim_fv_bad = clim_lookup.reindex(pd.MultiIndex.from_arrays([idx[bad].month, slot[bad]])).values
-    out.iloc[np.where(bad)[0]] = np.interp(clim_fv_bad, lut_pw, lut_ws)   # inverse of the power curve
-    return out
-
-
 def real_sd_ratios(ws, bad, ref):
     """sd(corrupted) / sd(reference) for each month of the Oct-Mar season (0.3 if undefined)."""
     idx = ws.index
@@ -228,40 +198,16 @@ def real_sd_ratios(ws, bad, ref):
     return ratios
 
 
-def proxy_by_month(versions, lut, bad, price, mo):
-    """Monthly proxy CF of several wind-speed versions, compared with the actual WIND CF.
-
-    Args:
-        versions: Dict label -> wind speed Series (e.g. Corrupted, QM-corrected, Climatology).
-        lut: Power-curve lookup table (ws_array, power_array).
-        bad: Boolean array; the months touched by it are evaluated.
-        price: Half-hourly price Series. mo: Monthly table with 'CF_WIND'.
-
-    Returns:
-        DataFrame with month, version, proxy, cf_actual and error (= proxy - actual).
-    """
-    idx = price.index
-    rows = []
-    for m_per in sorted(set(idx[bad].to_period('M'))):
-        mm = (idx >= m_per.start_time) & (idx <= m_per.end_time)
-        cf = mo.loc[mo.index.to_period('M') == m_per, 'CF_WIND'].values
-        cf = cf[0] if len(cf) > 0 else np.nan
-        for label, ws in versions.items():
-            pf = proxy_func(lut_cf(ws[mm], lut), price[mm])
-            rows.append({'month': m_per.strftime('%Y-%m'), 'version': label,
-                         'proxy': pf, 'cf_actual': cf, 'error': pf - cf})
-    return pd.DataFrame(rows)
-
-
-def simulate_qm_recovery(ws, lut, sd_ratios, windows, ref_all, price):
-    """Corrupt clean winters ourselves, run QM and measure the proxy CF error before/after.
+def simulate_qm_recovery(ws, sd_ratios, windows, ref_all):
+    """Corrupt clean winters ourselves, run QM and measure how close it gets to the truth.
 
     For each (label, start, end) window: squeeze the values towards the monthly median by
     `sd_ratios`, smooth with a 3-point moving average, apply QM with the other clean winters
-    as reference (the simulated one is excluded), then compare monthly proxy CF with the truth.
+    as reference (the simulated one is excluded), then compare with the original (true) values.
 
     Returns:
-        DataFrame with sim, month, proxy_true, proxy_fake_bad, proxy_recovered, err_bad, err_recov.
+        DataFrame with one row per (window, month): mean and sd of the truth / squashed / QM series,
+        the KS distance to the truth (0 = identical distribution) and the errors of the monthly mean and sd.
     """
     idx = ws.index
     rows = []
@@ -284,25 +230,20 @@ def simulate_qm_recovery(ws, lut, sd_ratios, windows, ref_all, price):
         ws_recovered, _, _ = apply_qm(ws_fake, ws, ref_all & ~sim_mask)
 
         for m_per in sorted(set(idx[sim_mask].to_period('M'))):
-            mm = (idx >= m_per.start_time) & (idx <= m_per.end_time)
-            p = price[mm]
-            pf_true = proxy_func(lut_cf(ws[mm], lut), p)
-            pf_fake = proxy_func(lut_cf(pd.Series(ws_fake.reindex(idx[mm]).values, index=idx[mm]), lut), p)
-            pf_recov = proxy_func(lut_cf(pd.Series(ws_recovered.reindex(idx[mm]).values, index=idx[mm]), lut), p)
+            mm = sim_mask & (idx >= m_per.start_time) & (idx <= m_per.end_time)
+            d = pd.DataFrame({'true': ws[mm], 'squashed': ws_fake.reindex(idx[mm]),
+                              'qm': ws_recovered.reindex(idx[mm])}).dropna()
             rows.append({'sim': sim_label, 'month': m_per.strftime('%Y-%m'),
-                         'proxy_true': pf_true, 'proxy_fake_bad': pf_fake, 'proxy_recovered': pf_recov,
-                         'err_bad': abs(pf_fake - pf_true), 'err_recov': abs(pf_recov - pf_true)})
-    return pd.DataFrame(rows)
-
-def lut_for_station(stn):
-    """Power-curve lookup for a station: the first farm that uses it as its nearest station,
-    otherwise DUNDWF3 as a cross-check (different power curve, but QM effectiveness is still measurable).
-
-    Returns (asset name, lookup table).
-    """
-    farms = [a for a in cfg['wind_assets'] if cfg['nearest_station_by_asset'].get(a) == stn]
-    asset = farms[0] if farms else 'DUNDWF3'
-    return asset, lut_data[asset]
+                         'mean_true': d['true'].mean(), 'mean_squashed': d['squashed'].mean(), 'mean_qm': d['qm'].mean(),
+                         'sd_true': d['true'].std(), 'sd_squashed': d['squashed'].std(), 'sd_qm': d['qm'].std(),
+                         'ks_squashed': ks_2samp(d['squashed'], d['true']).statistic,
+                         'ks_qm': ks_2samp(d['qm'], d['true']).statistic})
+    out_df = pd.DataFrame(rows)
+    out_df['mean_err_squashed'] = (out_df['mean_squashed'] - out_df['mean_true']).abs()
+    out_df['mean_err_qm'] = (out_df['mean_qm'] - out_df['mean_true']).abs()
+    out_df['sd_err_squashed'] = (out_df['sd_squashed'] - out_df['sd_true']).abs()
+    out_df['sd_err_qm'] = (out_df['sd_qm'] - out_df['sd_true']).abs()
+    return out_df
 
 
 # ── Plot style ──
@@ -332,17 +273,21 @@ def table_title(title, note=None):
 ```
 
 ## 2. Evidence of corruption
-Measured wind speed falls outside its historical range while generation stays normal.
+
+Before fixing anything, show that the data is really wrong. A time plot (2.1) shows that wind speed collapses while generation does not, and a table (2.2) measures the damage.
+
+### 2.1 Wind speed vs wind generation over time
+
+**What.** Monthly mean wind speed at station 89002 (blue line) against the range seen in the same calendar month in earlier years (blue band). The green dashed line is the wind fleet capacity factor (generation / capacity). The red area is the corrupted period.
+
+**How to read.** If the blue line leaves the band inside the red area while the green line stays normal, the farms produced as usual but the sensor says it was calm. The sensor is wrong, not the weather.
 
 ```{python}
 # =============================================================================
 # CELL 2.1 -- Evidence: measured wind drops, generation does not
 # Figure: monthly mean wind speed at station 89002 vs its historical range for the same month
-# (band), with the wind fleet capacity factor on a second axis. Wind leaving the band while the
-# fleet CF stays normal means the weather data is wrong, not the weather.
-# Table: how much the corruption damages the link between wind speed and generation.
+# (band), with the wind fleet capacity factor on a second axis.
 # =============================================================================
-
 
 ws_monthly = hh['ws_89002'].resample('ME').mean()
 ref = ws_monthly[ws_monthly.index < '2025-07-01']
@@ -368,11 +313,28 @@ add_titles(fig, 'Fig 2.1 – Monthly mean wind speed (station 89002) vs wind fle
            'Measured wind drops sharply while generation stays normal → the weather data is wrong, not the weather')
 display(fig)
 plt.close(fig)
+```
 
-# ── Wind speed vs generation: reference vs corrupted period, by station ──
-# Spearman is rank-based (blind to monotonic squashing). If it stays high, the rank order
-# survives and QM can restore the amplitude. 'ties' = share of half-hours that repeat the
-# previous value (a sign of smoothing).
+### 2.2 How much is the link between wind speed and generation damaged?
+
+**What.** For each station, compares the clean reference (Oct-Mar of FY23-25) with the corrupted period (Oct 2025 - Mar 2026).
+
+**Columns.**
+
+- `pearson`: how strongly wind speed moves with generation, looking at the values.
+- `spearman`: the same, looking only at the order (which half-hours are windier than which).
+- `sd`: spread of wind speed.
+- `ties`: share of half-hours that repeat the previous value (a sign of smoothing).
+
+**How to read.** `sd` falls and `ties` rises in the corrupted period: the data is squashed and smoothed. The key column is `spearman_bad`. If it is still high, the *order* of the values is still right and QM can rebuild their *size*. The sentence printed below the table gives the verdict.
+
+```{python}
+# =============================================================================
+# CELL 2.2 -- Table: wind speed vs generation, reference vs corrupted period
+# Pearson, Spearman, sd and share of repeated values per station.
+# Spearman is rank-based: if it stays high, the rank order survived and QM can restore the amplitude.
+# =============================================================================
+
 def diag(ws, gen, mask):
     """Pearson, Spearman, sd and share of repeated values of ws, and the link with gen."""
     d = pd.DataFrame({'ws': ws[mask], 'gen': gen[mask]}).dropna()
@@ -387,7 +349,7 @@ def diag(ws, gen, mask):
     }
 
 idx = hh.index
-bad_mask = (idx >= '2025-10-07') & (idx < '2026-04-01')                  # corruption window (starts 07/10, see §3.2)
+bad_mask = (idx >= '2025-10-07') & (idx < '2026-04-01')                  # corruption window (starts 07/10, see §3.3)
 ref_mask = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])  # same Oct-Mar months, prior years
 
 rows = []
@@ -415,21 +377,26 @@ else:
 ```
 
 ## 3. Is QM feasible?
-Checks that the corruption is a smooth squashing, then locates the exact start day.
+
+QM only works if the corruption is a smooth squashing: the order of the values is kept and only their size shrinks. Three steps: 3.1 is the order kept? 3.2 is the squashing similar in every month? 3.3 on which day does it start?
+
+### 3.1 Is the order of the values kept?
+
+**What.** Scatter of wind speed (x) against wind fleet CF (y). Left: clean reference. Right: corrupted period. The black line is the median CF in each 0.1 m/s wind-speed band.
+
+**How to read.** If the right-hand cloud looks like the left one squeezed into a narrower x range, and the black line still rises steadily, the corruption keeps the order of the values. Then QM is feasible.
 
 ```{python}
 # =============================================================================
-# CELL 3.1 -- Two checks before applying quantile mapping (station 89002)
-# QM is safe only if the corruption is a smooth squashing of the values. Check:
-#   (1) Monotonic: does generation still rise steadily with the corrupted wind speed?
-#   (2) Uniform:   is the squashing ratio similar in every month?
+# CELL 3.1 -- Check 1 before QM: is the relation monotonic? (station 89002)
+# QM is safe only if the corruption is a smooth squashing of the values.
+# Does generation still rise steadily with the corrupted wind speed?
 # =============================================================================
-
 
 idx = hh.index
 ws_A = hh['ws_89002']
 gen_wind = hh['gen_wind']
-bad  = (idx >= '2025-10-07') & (idx < '2026-04-01')   # §3.2: corruption starts 07/10
+bad  = (idx >= '2025-10-07') & (idx < '2026-04-01')   # §3.3: corruption starts 07/10
 ref  = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 
 # ═══════════════════════════════════════════════════════════════
@@ -458,6 +425,24 @@ add_titles(fig, 'Fig 3.1 – Wind speed vs wind fleet CF: reference vs corrupted
            'Check (1), monotonic? If the corrupted-period median still rises steadily, QM is feasible')
 display(fig)
 plt.close(fig)
+```
+
+### 3.2 Is the squashing similar in every month?
+
+**What.** For each month, the ratio corrupted / reference of the sd, the median (p50) and the 90th percentile (p90), printed as a table with the number of half-hours used.
+
+**How to read.** Ratios below 1 mean squashing. The coefficient of variation (CV) of the sd ratio says how similar the months are: low CV means one rule would fit all months, high CV means each month needs its own mapping. QM in section 4 maps month by month anyway, so this is a safety check.
+
+```{python}
+# =============================================================================
+# CELL 3.2 -- Check 2 before QM: is the squashing uniform across months?
+# Similar ratio in every month -> one common mapping would do; otherwise map month by month.
+# =============================================================================
+
+idx = hh.index
+ws_A = hh['ws_89002']
+bad  = (idx >= '2025-10-07') & (idx < '2026-04-01')
+ref  = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 
 # ═══════════════════════════════════════════════════════════════
 # (2) UNIFORM? Squashing ratio per month (corrupted / reference): sd, p50, p90
@@ -489,10 +474,16 @@ else:
     print('→ CV ≥ 0.15: non-uniform compression → map each month separately.')
 ```
 
+### 3.3 On which day does the corruption start?
+
+**What.** The squashing does not start on 1 October (the October ratio in 3.2 is close to 1), so this step finds the first bad day. Each day of October 2025 is compared with the average daily mean and sd of earlier Octobers. The first day with a very low mean (below 50% of the reference) or a very low sd (below 40%) is flagged.
+
+**How to read.** The printed table shows the days around the start, with the verdict per day. In Fig 3.3 the rolling 24h mean (top) and sd (bottom) fall at the red line. That date is the start of the QM window used from section 4 on.
+
 ```{python}
 # =============================================================================
-# CELL 3.2 -- Find the exact day the corruption starts (October 2025)
-# §3.1 showed almost no squashing in October (sd ratio ~0.92), so the corruption probably
+# CELL 3.3 -- Find the exact day the corruption starts (October 2025)
+# §3.2 showed almost no squashing in October (sd ratio ~0.92), so the corruption probably
 # starts part-way through the month. Each October 2025 day is compared with the daily mean
 # and sd of Octobers in earlier years; the first day with a very low mean or sd is the start.
 # =============================================================================
@@ -566,7 +557,7 @@ axes[1].set_xlabel('Day')
 axes[1].legend(fontsize=7)
 
 fig.tight_layout()
-add_titles(fig, 'Fig 3.2 – Locating the corruption start day (October 2025, station 89002)',
+add_titles(fig, 'Fig 3.3 – Locating the corruption start day (October 2025, station 89002)',
            'Rolling 24h mean and sd fall sharply on the first corrupted day (red line)')
 display(fig)
 plt.close(fig)
@@ -581,8 +572,27 @@ if first_bad_day:
     print(f'\u2192 When applying QM: only from {first_bad_day.strftime("%d/%m")} onward, keeping the earlier clean data unchanged.')
 ```
 
-## 4. QM for stations 89002 and 86338
+## 4. Apply QM to stations 89002 and 86338
+
 The corruption is one DTN error that hits all stations, so both stations share the same window and the same method.
+
+**What.** For every (month, half-hour slot) group in the corrupted window:
+
+1. rank the corrupted values,
+2. turn the ranks into quantiles,
+3. read the same quantiles off the clean reference (same month and slot, FY23-25).
+
+Only weather data is used, no generation, so nothing from the target leaks in. This section covers 7 Oct 2025 to 31 Mar 2026. April is added in section 6.3.
+
+**What you will see, for each station:** a distribution table, a figure with three panels, and at the end one summary table.
+
+**How to read the figure.**
+
+- *Left, distribution:* after QM the green histogram should sit on the blue one (reference), not on the red one.
+- *Middle, Oct-Nov 2025:* the green line should no longer drop at 7 Oct.
+- *Right, scatter:* the green points should cover the same cloud as the blue ones.
+
+**Why Pearson barely moves (last table).** QM keeps the order of the values, so the correlation hardly changes. The amplitude is checked directly in section 5.
 
 ```{python}
 # =============================================================================
@@ -592,7 +602,7 @@ The corruption is one DTN error that hits all stations, so both stations share t
 #   rank the corrupted values -> turn ranks into quantiles -> read those quantiles off the clean reference.
 # Reference = same month and slot in FY23-25. Only weather data is used (no generation),
 # so there is no leakage from the target.
-# Window here: 2025-10-07 to 2026-03-31 (April is added in §6.2).
+# Window here: 2025-10-07 to 2026-03-31 (April is added in §6.3).
 # Output: hh['ws_<station>_qm'] (equal to the original values outside the window).
 # =============================================================================
 
@@ -600,7 +610,7 @@ idx = hh.index
 gen_wind = hh['gen_wind']
 STATIONS = [89002, 86338]
 
-# Masks: corrupted window (start day from §3.2) and clean reference months
+# Masks: corrupted window (start day from §3.3) and clean reference months
 CORRUPT_START = pd.Timestamp('2025-10-07')
 CORRUPT_END   = pd.Timestamp('2026-03-31 23:30:00')
 bad = (idx >= CORRUPT_START) & (idx <= CORRUPT_END)
@@ -668,185 +678,198 @@ for i, stn in enumerate(STATIONS):
     plt.close(fig)
 
 table_title('Table 4.1c – QM summary and Pearson check (wind speed vs wind generation)',
-            'Pearson barely moves because QM keeps ranks; the proxy CF check in §5 is the real test')
+            'Pearson barely moves because QM keeps ranks; the amplitude is checked directly in §5')
 display(pd.DataFrame(summary_rows).set_index('station').round(3))
 ```
 
-## 5. Validation
-Pearson cannot tell squashed data from correct data, so QM is tested in two ways that do: the monthly proxy CF vs the actual CF, and a simulation on clean winters where the right answer is known.
+## 5. Did QM bring back the right amplitude?
+
+Pearson cannot tell squashed data from corrected data, so the amplitude is checked directly, using wind speed only. Two tests:
+
+- **5.1** compares the corrected data with the clean reference, month by month.
+- **5.2** corrupts clean winters ourselves, where the true answer is known, and checks that QM gets back close to it.
+
+### 5.1 Corrected data vs the clean reference, month by month
+
+**What.** For each station and each month of the window, the wind speed is compared with the same calendar month of FY23-25, before and after QM:
+
+- *mean ratio* and *sd ratio*: 1 means the same as the reference.
+- *KS distance*: largest gap between the two distributions, 0 means identical.
+
+**How to read.** From red (before) to green (after), the ratios should move from below 1 to about 1 and the KS distance should fall towards 0. A month where green is still far from 1 is a month QM could not fix.
+
+**Limit.** This checks the *distribution* (level and spread). QM does not restore the exact timing of each half-hour: it keeps the order that DTN gave, and Table 2.2 (Spearman) showed that this order is still informative.
 
 ```{python}
 # =============================================================================
-# CELL 5.1 -- Does QM help? Proxy CF error through the power curve
-# Turn wind speed into a generation proxy with the power curve f(v) and compare the monthly proxy CF
-# with the actual wind CF for three versions of the wind speed:
-#   Corrupted    = raw DTN data
-#   QM-corrected = after §4.1
-#   Climatology  = placebo: average f(v) per (month, slot) from clean years, ignoring the real weather
-# QM must beat both. Beating the placebo shows real weather information was recovered.
+# CELL 5.1 -- Does QM restore the amplitude? Month by month vs the clean reference
+# For each station and each month of the window (Oct 2025 - Mar 2026), compare the wind speed with the
+# same calendar month of FY23-25: mean ratio, sd ratio (1 = same as reference) and KS distance
+# (0 = identical distribution), before and after QM. Wind speed only, no generation.
 # =============================================================================
 
+
 idx = hh.index
-price = hh['price']
 STATIONS = [89002, 86338]
 bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
 ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
+MONTHS = [10, 11, 12, 1, 2, 3]
 
-proxy_res = {}   # station -> MAE of each version (reused in the summary table of §5.2)
+check = {}
 for i, stn in enumerate(STATIONS):
-    ws_orig, ws_qm = hh[f'ws_{stn}'], hh[f'ws_{stn}_qm']
-    lut_asset, lut = lut_for_station(stn)
+    ws, ws_qm = hh[f'ws_{stn}'], hh[f'ws_{stn}_qm']
+    rows = []
+    for m in MONTHS:
+        r = ws[ref & (idx.month == m)].dropna()
+        b = ws[bad & (idx.month == m)].dropna()
+        q = ws_qm[bad & (idx.month == m)].dropna()
+        rows.append({'month': calendar.month_abbr[m],
+                     'mean ratio before': b.mean() / r.mean(), 'mean ratio after': q.mean() / r.mean(),
+                     'sd ratio before': b.std() / r.std(), 'sd ratio after': q.std() / r.std(),
+                     'KS before': ks_2samp(b, r).statistic, 'KS after': ks_2samp(q, r).statistic})
+    check[stn] = pd.DataFrame(rows).set_index('month')
+    table_title(f'Table 5.1{"ab"[i]} – Station {stn}: wind speed vs the clean reference, before and after QM',
+                'Ratios: 1 = same as the reference. KS distance: 0 = identical distribution')
+    display(check[stn].round(3))
 
-    # Climatology placebo: it uses no real wind speed. If it scores as well as the corrupted data,
-    # that data carries no information (see climatology_ws)
-    ws_clim = climatology_ws(ws_orig, lut, bad, ref)
-
-    # Monthly proxy CF for each month of the window, three versions
-    df_res = proxy_by_month({'Corrupted': ws_orig, 'QM-corrected': ws_qm, 'Climatology': ws_clim},
-                            lut, bad, price, mo)
-    pivot = df_res.pivot(index='month', columns='version', values='proxy')
-    pivot['Actual CF'] = df_res.groupby('month')['cf_actual'].first()
-    pivot = pivot[['Actual CF', 'Corrupted', 'QM-corrected', 'Climatology']]
-    table_title(f'Table 5.1{"ab"[i]} – Monthly proxy CF, station {stn} (power curve: {lut_asset})',
-                'Corrupted, QM-corrected and climatology placebo vs the actual wind CF')
-    display(pivot.round(3))
-
-    # Error vs actual CF (MAE = mean absolute error, bias = mean signed error)
-    mae  = {v: df_res[df_res['version'] == v]['error'].abs().mean() for v in pivot.columns[1:]}
-    bias = {v: df_res[df_res['version'] == v]['error'].mean() for v in pivot.columns[1:]}
-    proxy_res[stn] = mae
-    for v in mae:
-        print(f'  Station {stn} {v:>13}: MAE = {mae[v]:.3f}, bias = {bias[v]:+.3f}')
-    if mae['QM-corrected'] < mae['Corrupted'] and mae['QM-corrected'] < mae['Climatology']:
-        print(f'  ✔ QM-corrected is best (MAE={mae["QM-corrected"]:.3f}): it restores weather information beyond the placebo.')
-    elif mae['QM-corrected'] < mae['Corrupted']:
-        print(f'  △ QM beats the corrupted data but not the climatology placebo ({mae["Climatology"]:.3f}): marginal, consider excluding.')
-    else:
-        print(f'  ✗ QM does not improve (MAE={mae["QM-corrected"]:.3f} vs corrupted {mae["Corrupted"]:.3f}): exclude or replace with ERA5.')
-
-    # Plots
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
-
-    # (i) Monthly proxy CF
-    months = pivot.index
-    x = np.arange(len(months))
-    w = 0.2
-    axes[0].bar(x - w, pivot['Corrupted'], w, label='Corrupted', color='crimson', alpha=0.7)
-    axes[0].bar(x,     pivot['QM-corrected'], w, label='QM-corrected', color='forestgreen', alpha=0.7)
-    axes[0].bar(x + w, pivot['Climatology'], w, label='Climatology', color='grey', alpha=0.5)
-    axes[0].scatter(x, pivot['Actual CF'], s=60, color='black', zorder=5, marker='D', label='Actual CF')
-    axes[0].set_xticks(x); axes[0].set_xticklabels(months, rotation=45, fontsize=8)
-    axes[0].set_ylabel('Contract Factor'); axes[0].legend(fontsize=7)
-    axes[0].set_title('Proxy CF: corrupted vs after QM vs climatology vs actual')
-
-    # (ii) Absolute error
-    for v, color in [('Corrupted', 'crimson'), ('QM-corrected', 'forestgreen'), ('Climatology', 'grey')]:
-        sub = df_res[df_res['version'] == v].sort_values('month')
-        axes[1].plot(sub['month'], sub['error'].abs(), 'o-', color=color, label=v, ms=5)
-    axes[1].axhline(0, color='black', ls='-', lw=0.5)
-    axes[1].set_ylabel('|Proxy - actual CF|'); axes[1].set_title('Absolute error by month')
-    axes[1].legend(fontsize=7); axes[1].tick_params(axis='x', rotation=45)
-
-    fig.tight_layout()
-    add_titles(fig, f'Fig 5.1{"ab"[i]} – Proxy CF check, station {stn}',
-               'Does QM bring the proxy CF closer to the actual CF than the corrupted data or the climatology placebo?')
-    display(fig)
-    plt.close(fig)
+# Figure: before (red) vs after (green) for each measure
+measures = [('sd ratio', 'sd ratio (1 = reference)', 1), ('mean ratio', 'mean ratio (1 = reference)', 1),
+            ('KS', 'KS distance (0 = identical)', 0)]
+fig, axes = plt.subplots(2, 3, figsize=(16, 7))
+x = np.arange(len(MONTHS))
+for r_i, stn in enumerate(STATIONS):
+    for c_i, (col, ylabel, target) in enumerate(measures):
+        ax = axes[r_i, c_i]
+        ax.bar(x - 0.2, check[stn][f'{col} before'], 0.4, color='crimson', alpha=0.7, label='Before QM')
+        ax.bar(x + 0.2, check[stn][f'{col} after'], 0.4, color='forestgreen', alpha=0.7, label='After QM')
+        ax.axhline(target, color='black', lw=0.8, ls='--')
+        ax.set_xticks(x); ax.set_xticklabels(check[stn].index)
+        ax.set_ylabel(ylabel)
+        ax.set_title(f'Station {stn}', loc='left', fontsize=10)
+        ax.spines[['top', 'right']].set_visible(False)
+        if r_i == 0 and c_i == 0:
+            ax.legend(frameon=False, fontsize=8)
+fig.tight_layout()
+sdb = {s: check[s]['sd ratio before'].mean() for s in STATIONS}
+sda = {s: check[s]['sd ratio after'].mean() for s in STATIONS}
+add_titles(fig, 'Fig 5.1 – Wind speed vs the clean reference: before and after QM',
+           f'Average sd ratio {sdb[89002]:.2f} to {sda[89002]:.2f} (station 89002) and '
+           f'{sdb[86338]:.2f} to {sda[86338]:.2f} (station 86338); 1 = same as reference')
+display(fig)
+plt.close(fig)
 ```
+
+### 5.2 Simulation on clean winters: can QM undo a corruption we make ourselves?
+
+**What.** A test where we know the right answer.
+
+1. Take two clean winters, FY24 (Oct 23 - Mar 24) and FY25 (Oct 24 - Mar 25), as the truth.
+2. Squash them the way the real corruption did (the real sd ratio of each month, plus a 3-point smoothing).
+3. Run QM on the squashed data, using the *other* clean winters as the reference.
+4. Compare with the truth.
+
+**Metrics.**
+
+- *Monthly mean error* and *monthly sd error*: how far the monthly mean and sd are from the truth (m/s).
+- *KS distance*: gap between the distribution of the month and the true distribution. 0 means identical.
+- *Recovery (%)*: share of the error that QM removes. 100% is perfect, 0% means no help.
+
+**How to read.** Left panels: the monthly sd. Red (squashed) sits below the blue truth, and green (QM) should be back close to blue. Right panels: the KS distance to the truth, where green should be well below red. We do not score half-hour by half-hour errors: QM restores the *size* of the values, not their exact timing, so that measure would punish it unfairly.
 
 ```{python}
 # =============================================================================
 # CELL 5.2 -- Test QM on clean data: how much error does it really remove?
-# §5.1 compares with the actual CF, which also contains curtailment and fleet effects.
 # Here the right answer is known: corrupt clean winters ourselves and see how well QM undoes it.
 #   1) Take clean Oct-Mar of FY24 and FY25 as the truth
 #   2) Squash it like the real corruption (real sd ratio per month + 3-point smoothing)
 #   3) Run QM on the squashed data, using the OTHER years as the reference
-#   4) Compare proxy CF: truth vs squashed vs QM-recovered
-# Result: the share of the proxy CF error that QM removes (recovery %).
+#   4) Compare with the truth: monthly mean error, monthly sd error, KS distance
 # =============================================================================
 
+
 idx = hh.index
-price = hh['price']
 real_bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
 real_ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 
-# Simulate on two clean winters: FY24 (Oct23-Mar24) and FY25 (Oct24-Mar25)
-# QM reference: the other clean winters (the simulated one is excluded)
+# Simulate on two clean winters; the QM reference is the other clean winters (the simulated one is excluded)
 sim_windows = [('FY24 (Oct23–Mar24)', '2023-10-07', '2024-04-01'),
                ('FY25 (Oct24–Mar25)', '2024-10-07', '2025-04-01')]
 
-recovery = {}
-fig, axes = plt.subplots(2, 2, figsize=(14, 8))
-for r, stn in enumerate(STATIONS):
+def recovery_pct(before, after):
+    """Share of the error removed by QM (100 = perfect)."""
+    return (1 - after / before) * 100 if before > 0 else np.nan
+
+sim_res = {}
+fig, axes = plt.subplots(2, 2, figsize=(15, 8))
+for r_i, stn in enumerate(STATIONS):
     ws = hh[f'ws_{stn}']
-    lut_asset, lut = lut_for_station(stn)
 
     # Squashing strength measured on the real corrupted data of this station (sd ratio per month)
     sd_ratios = real_sd_ratios(ws, real_bad, real_ref)
     print(f'Station {stn}: real compression ratios', {m: round(float(v), 3) for m, v in sd_ratios.items()})
 
-    df_sim = simulate_qm_recovery(ws, lut, sd_ratios, sim_windows, real_ref, price)
-    mae_bad_sim, mae_recov = df_sim['err_bad'].mean(), df_sim['err_recov'].mean()
-    recovery[stn] = (1 - mae_recov / mae_bad_sim) * 100
-    print(f'  MAE proxy fake-compressed vs clean: {mae_bad_sim:.3f}')
-    print(f'  MAE proxy QM-recovered vs clean:    {mae_recov:.3f}  -> QM recovers {recovery[stn]:.0f}%\n')
+    df_sim = simulate_qm_recovery(ws, sd_ratios, sim_windows, real_ref)
+    sim_res[stn] = df_sim
+    x = np.arange(len(df_sim))
 
-    for c, sim in enumerate(df_sim['sim'].unique()):
-        sub = df_sim[df_sim['sim'] == sim]
-        x = np.arange(len(sub))
-        ax = axes[r, c]
-        ax.bar(x - 0.15, sub['err_bad'], 0.3, label='Fake-compressed (no QM)', color='crimson', alpha=0.7)
-        ax.bar(x + 0.15, sub['err_recov'], 0.3, label='QM-corrected', color='forestgreen', alpha=0.7)
-        ax.set_xticks(x); ax.set_xticklabels(sub['month'], rotation=45, fontsize=8)
-        ax.set_ylabel('|Proxy - clean proxy|')
-        ax.set_title(f'Station {stn} – {sim}\nMAE compressed={sub["err_bad"].mean():.3f}, MAE QM={sub["err_recov"].mean():.3f}',
-                     fontsize=10)
-        ax.legend(fontsize=7)
+    # Left: monthly sd of the truth, the squashed data and the QM result
+    ax = axes[r_i, 0]
+    ax.plot(x, df_sim['sd_true'], 'o-', color=BLUE, label='Truth (clean)')
+    ax.plot(x, df_sim['sd_squashed'], 'o-', color='crimson', label='Squashed (fake corruption)')
+    ax.plot(x, df_sim['sd_qm'], 'o-', color='forestgreen', label='After QM')
+    ax.set_ylabel('Monthly sd (m/s)')
+    ax.set_title(f'Station {stn}: monthly sd', loc='left', fontsize=10)
+
+    # Right: gap between the distribution and the truth
+    ax = axes[r_i, 1]
+    ax.bar(x - 0.2, df_sim['ks_squashed'], 0.4, color='crimson', alpha=0.7, label='Squashed (no QM)')
+    ax.bar(x + 0.2, df_sim['ks_qm'], 0.4, color='forestgreen', alpha=0.7, label='After QM')
+    ax.set_ylabel('KS distance to the truth (0 = identical)')
+    ax.set_title(f'Station {stn}: distribution gap', loc='left', fontsize=10)
+
+    for ax in axes[r_i]:
+        ax.set_xticks(x); ax.set_xticklabels(df_sim['month'], rotation=45, fontsize=8)
+        ax.legend(frameon=False, fontsize=8)
+        ax.spines[['top', 'right']].set_visible(False)
+
+# Summary table: error before / after QM and recovery
+metrics = [('Monthly mean error (m/s)', 'mean_err'), ('Monthly sd error (m/s)', 'sd_err'), ('KS distance to truth', 'ks')]
+rows = []
+for stn in STATIONS:
+    d = sim_res[stn]
+    for label, key in metrics:
+        b, a = d[f'{key}_squashed'].mean(), d[f'{key}_qm'].mean()
+        rows.append({'station': stn, 'metric': label, 'Squashed': b, 'After QM': a, 'Recovery (%)': recovery_pct(b, a)})
+val_summary = pd.DataFrame(rows).set_index(['station', 'metric'])
+rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in STATIONS for l, k in metrics}
 
 fig.tight_layout()
-add_titles(fig, 'Fig 5.2 – Simulation on clean winters: how much proxy error does QM remove?',
-           f'QM recovers {recovery[89002]:.0f}% (station 89002) and {recovery[86338]:.0f}% (station 86338) '
-           'of the proxy CF error caused by amplitude compression')
+add_titles(fig, 'Fig 5.2 – Simulation on clean winters: how close does QM get to the truth?',
+           f'QM removes {rec[(89002, "sd_err")]:.0f}% / {rec[(86338, "sd_err")]:.0f}% of the monthly sd error and '
+           f'{rec[(89002, "ks")]:.0f}% / {rec[(86338, "ks")]:.0f}% of the distribution gap (stations 89002 / 86338)')
 display(fig)
 plt.close(fig)
 
-# Summary of both tests (numbers come from §5.1 and the simulation above)
-val_summary = pd.DataFrame({
-    stn: {'MAE corrupted': proxy_res[stn]['Corrupted'],
-          'MAE QM-corrected': proxy_res[stn]['QM-corrected'],
-          'MAE climatology': proxy_res[stn]['Climatology'],
-          'Improvement vs corrupted (%)': (1 - proxy_res[stn]['QM-corrected'] / proxy_res[stn]['Corrupted']) * 100,
-          'Simulated recovery (%)': recovery[stn]}
-    for stn in STATIONS}).T
-val_summary.index.name = 'station'
-table_title('Table 5.2 – Validation summary of both stations',
-            'Left: proxy CF error vs actual CF (§5.1). Right-most column: recovery in the clean-data simulation')
+table_title('Table 5.2 – Simulation summary: error before and after QM',
+            'Average over the 12 simulated months; Recovery = share of the error QM removes (100% = perfect)')
 display(val_summary.round(3))
-
-# Conclusion
-for stn in STATIONS:
-    rec = recovery[stn]
-    if rec >= 70:
-        verdict = 'QM recovers >= 70% -> worth rescuing: correct with QM and keep the flag for parallel reporting.'
-    elif rec >= 40:
-        verdict = 'QM recovers 40-70% -> clear improvement but some error remains; combine with ERA5 if available.'
-    else:
-        verdict = 'QM recovers < 40% -> not enough: exclude or replace with ERA5.'
-    print(f'Station {stn}: {verdict}')
 ```
 
 ## 6. Extend the correction to 1-14 April
-The corruption does not stop on 31 March. Detect where it ends, then run QM on the extra days.
+
+The corruption does not stop on 31 March. 6.1 checks whether the months after March still look corrupted, 6.2 finds the end date, and 6.3 runs QM on the extra days.
+
+### 6.1 Do March to June 2026 still look corrupted?
+
+**What.** Each month of Mar-Jun 2026 is compared with the same month of FY23-25: ratio of the sd and ratio of the mean.
+
+**How to read.** A low `sd_ratio` or a low `mean_ratio` means the data is still squashed. The `flag` column marks `COMPRESSED` (sd ratio below 0.6) and `borderline` (below 0.8).
 
 ```{python}
 # =============================================================================
-# CELL 6.1 -- Find when the corruption ends (April 2026)
+# CELL 6.1 -- Do Mar-Jun 2026 still look corrupted?
 # Table: mean and sd of Mar-Jun 2026 vs the same months of FY23-25 for both stations.
 # sd_ratio far below 1 (COMPRESSED) or a low mean ratio means the data is still squashed.
-# Figure: daily mean of April 2026 against the daily mean of Aprils in FY23-25.
-# The end is where the ratio jumps back to normal: first day with a 3-day rolling ratio > 0.8,
-# and the largest one-day jump. Detection only, nothing is modified here (the fix is §6.2).
 # =============================================================================
 
 idx = hh.index
@@ -866,6 +889,24 @@ for stn in [89002, 86338]:
 table_title('Table 6.1 – Mar-Jun 2026 vs the same months of FY23-25',
             'Ratio of 2026 to the FY23-25 reference; a low ratio means the data is still corrupted')
 display(pd.DataFrame(rows).set_index(['station', 'month 2026']).round(3))
+```
+
+### 6.2 On which day does the corruption end?
+
+**What.** Day-by-day detection in April 2026. Detection only, nothing is modified here.
+
+**How to read.** The figure shows the daily mean wind speed of April 2026 (orange) against the typical April range of FY23-25 (grey band, p10 to p90). The corruption ends where the orange line comes back into the band and stays there. The printed lines give the first day with a 3-day rolling ratio above 0.8 and the largest one-day jump.
+
+```{python}
+# =============================================================================
+# CELL 6.2 -- Find when the corruption ends (April 2026)
+# Daily mean of April 2026 against the daily mean of Aprils in FY23-25.
+# The end is where the ratio jumps back to normal: first day with a 3-day rolling ratio > 0.8,
+# and the largest one-day jump. Detection only, nothing is modified here (the fix is §6.3).
+# =============================================================================
+
+
+idx = hh.index
 
 # ── (b) Daily detection in April 2026 ──
 for stn in [89002, 86338]:
@@ -915,9 +956,15 @@ add_titles(fig, 'Fig 6.1 – April 2026 daily mean wind speed vs reference band'
 display(fig); plt.close(fig)
 ```
 
+### 6.3 Extend QM to 1-14 April
+
+**What.** The same QM as in section 4, applied to 1-14 April 2026. The reference is the Aprils of FY23-25. Because it is a single month, the groups are the half-hour slots only, with smaller minimum group sizes.
+
+**How to read Table 6.3.** The mean and sd ratios against the April reference should move towards 1 after QM. After this cell, `hh['ws_<station>_qm']` is corrected from 7 Oct 2025 to 14 Apr 2026.
+
 ```{python}
 # =============================================================================
-# CELL 6.2 -- Extend the QM correction to 1-14 April 2026
+# CELL 6.3 -- Extend the QM correction to 1-14 April 2026
 # The detection cell above shows the corruption lasts until about 15 April:
 #   1-14 Apr: sd ratio ~0.96 but mean ratio only 0.66-0.72 (still squashed)
 #   15 Apr: transition day;  16 Apr onwards: clean (ratio > 0.8)
@@ -960,7 +1007,7 @@ for stn in [89002, 86338]:
                      'mean ratio before': orig_v.mean() / ref_v.mean(), 'mean ratio after': fixed_v.mean() / ref_v.mean(),
                      'sd ratio before': orig_v.std() / ref_v.std(), 'sd ratio after': fixed_v.std() / ref_v.std()})
 
-table_title('Table 6.2 – QM extended to 1-14 April 2026',
+table_title('Table 6.3 – QM extended to 1-14 April 2026',
             'Mean and sd ratios vs the April reference (FY23-25) should move towards 1')
 display(pd.DataFrame(ext_rows).set_index('station').round(3))
 print('Corruption window used from here on: 2025-10-07 -> 2026-04-14 23:30 '
@@ -968,7 +1015,12 @@ print('Corruption window used from here on: 2025-10-07 -> 2026-04-14 23:30 '
 ```
 
 ## 7. Save the corrected weather file
-Runs after the April extension so the file covers the whole window.
+
+Writes the file that the forecast notebooks read. It runs after section 6.3 so the whole window is included.
+
+- Only `wind_speed_kph` changes, and only from 7 Oct 2025 to 14 Apr 2026. Everything else is the raw DTN data.
+- The column `qm_corrected` is 1 inside that window and 0 outside.
+- Table 7.1 shows the first rows of the file, and the lines below it print the statistics of the corrected series.
 
 ```{python}
 # =============================================================================
@@ -978,7 +1030,7 @@ Runs after the April extension so the file covers the whole window.
 #         per station, plus the flag qm_corrected (1 inside the corrupted window).
 # Only wind_speed_kph changes, and only from 2025-10-07 to 2026-04-14: it is replaced by the QM
 # series from hh (m/s x 3.6 = kph). Everything else is the raw data.
-# Run it AFTER §6.2 so that 1-14 April is included.
+# Run it AFTER §6.3 so that 1-14 April is included.
 # =============================================================================
 
 
@@ -1052,12 +1104,17 @@ for stn in STATIONS:
           f'range=[{qm_section[ws_col].min():.1f}, {qm_section[ws_col].max():.1f}]')
 ```
 
-## 8. Summary figures
+## 8. Summary
+
+### 8.1 Corrected wind speed vs the clean reference
+
+**What.** The distribution of the QM-corrected wind speed (7 Oct 2025 - 14 Apr 2026) against the clean Oct-Apr months of FY23-25, for each station.
+
+**How to read.** `Diff %` is the difference between the two columns. QM matches the reference by construction, so it should be small. A large value points to a month or slot that was skipped because it had too few points.
 
 ```{python}
 # =============================================================================
-# CELL 8.1 -- Full timeline, original vs production (QM-corrected)
-# Daily mean wind speed over Jul 2022 - Jun 2026, with the corruption window shaded.
+# CELL 8.1 -- Corrected vs reference wind speed (table)
 # Table: how close the corrected distribution is to the clean reference.
 # =============================================================================
 
@@ -1081,8 +1138,24 @@ for i, stn in enumerate([89002, 86338]):
     table_title(f'Table 8.1{"ab"[i]} – Station {stn}: QM-corrected vs reference wind speed (m/s)',
                 'Window 7 Oct 2025 - 14 Apr 2026 vs the clean Oct-Apr months of FY23-25')
     display(stats)
+```
 
-# Figure: full timeline
+### 8.2 Full timeline
+
+**What.** Daily mean wind speed from Jul 2022 to Jun 2026 for each station: original data (orange) and QM-corrected data (blue). The shaded area is the corruption window.
+
+**How to read.** Outside the shaded area the two lines are identical. Inside it, the orange line is flat and low, while the blue line has a normal spread.
+
+```{python}
+# =============================================================================
+# CELL 8.2 -- Full timeline, original vs production (QM-corrected)
+# Daily mean wind speed over Jul 2022 - Jun 2026, with the corruption window shaded.
+# =============================================================================
+
+
+idx = hh.index
+bad_mask = (idx >= '2025-10-07') & (idx <= '2026-04-14 23:30:00')   # full corruption window
+_assets = {89002: 'DUNDWF3, BRYB1WF1, BULGANA1', 86338: 'MRTLSWF1'}
 
 fig, axes = plt.subplots(2, 1, figsize=(16, 7))
 
@@ -1109,120 +1182,7 @@ for ax, stn in zip(axes, [89002, 86338]):
 
 axes[1].tick_params(axis='x', rotation=30)
 fig.tight_layout()
-add_titles(fig, 'Fig 8.1 – Full dataset Jul 2022 – Jun 2026: original vs QM-corrected',
+add_titles(fig, 'Fig 8.2 – Full dataset Jul 2022 – Jun 2026: original vs QM-corrected',
            'Daily mean wind speed, corruption window shaded')
-display(fig); plt.close(fig)
-```
-
-```{python}
-# =============================================================================
-# CELL 8.2 -- FY26 wind CF proxy error, raw vs QM-corrected weather
-# Fleet proxy: for each wind farm take the wind speed of its nearest station, apply the farm's
-# power-curve lookup (LUT) to get a CF, then add up the farms weighted by capacity.
-# Proxy CF = DWAP+/TWAP of that fleet series (proxy_func), compared with the actual WIND CF per month.
-# =============================================================================
-
-
-idx = hh.index
-price = hh['price']
-fy26_months = sorted(set(idx[(idx >= '2025-07-01') & (idx < '2026-07-01')].to_period('M')))
-
-# Fleet proxy: sum over farms of capacity x f(wind speed at the farm's nearest station)
-# Each farm uses its own LUT and its nearest station
-def _fleet_proxy(ws_dict):
-    """Compute fleet-level proxy generation from per-station wind speed."""
-    fleet_gen = pd.Series(0.0, index=idx)
-    fleet_cap = 0.0
-    for asset in cfg['wind_assets']:
-        stn = cfg['nearest_station_by_asset'][asset]
-        cap = vret_capacity[asset]
-        ws = ws_dict[stn]
-        cf_asset = lut_cf(ws, lut_data[asset])
-        fleet_gen += cap * cf_asset * 0.5  # MWh per HH
-        fleet_cap += cap
-    # Fleet CF proxy = DWAP+ / TWAP via proxy_func
-    fleet_cf = fleet_gen / (fleet_cap * 0.5)  # back to capacity factor
-    return fleet_cf
-
-# Raw wind speed (corrupted Oct-Apr)
-ws_raw_dict = {stn: hh[f'ws_{stn}'] for stn in [89002, 86338]}
-
-# Production wind speed (QM-corrected in corruption window)
-ws_qm_dict = {}
-for stn in [89002, 86338]:
-    ws = hh[f'ws_{stn}'].copy()
-    ws[bad_mask] = hh[f'ws_{stn}_qm'][bad_mask]
-    ws_qm_dict[stn] = ws
-
-fleet_cf_raw = _fleet_proxy(ws_raw_dict)
-fleet_cf_qm  = _fleet_proxy(ws_qm_dict)
-
-# Compute monthly proxy CF (DWAP+/TWAP) for FY26
-rows = []
-for m_per in fy26_months:
-    m_s, m_e = m_per.start_time, m_per.end_time
-    mm = (idx >= m_s) & (idx <= m_e)
-    p = price[mm]
-    cf_actual = mo.loc[mo.index.to_period('M') == m_per, 'CF_WIND'].values
-    cf_actual = cf_actual[0] if len(cf_actual) > 0 else np.nan
-    is_corrupt = bool(bad_mask[mm].any())
-    for label, fleet_cf in [('Raw data', fleet_cf_raw), ('QM-corrected', fleet_cf_qm)]:
-        pf = proxy_func(fleet_cf[mm], p)
-        rows.append({'month': str(m_per), 'version': label,
-                     'proxy': pf, 'actual': cf_actual,
-                     'error': abs(pf - cf_actual), 'corrupted': is_corrupt})
-
-df_fy26 = pd.DataFrame(rows)
-
-# Summary
-print('=== Fleet WIND Contract Factor proxy MAE - FY26 ===')
-print(f'    (4 assets, cap-weighted wind speed, per-asset LUT)\n')
-for sub_label in ['All 12 months', 'Corrupted months', 'Clean months']:
-    for v in ['Raw data', 'QM-corrected']:
-        sub = df_fy26[df_fy26['version'] == v]
-        if sub_label == 'Corrupted months': sub = sub[sub['corrupted']]
-        elif sub_label == 'Clean months':   sub = sub[~sub['corrupted']]
-        print(f'  {sub_label:>20} | {v:>14}: MAE = {sub["error"].mean():.3f}')
-    print()
-
-# ── Chart ──
-mae_raw = df_fy26[df_fy26['version']=='Raw data']['error'].mean()
-mae_qm  = df_fy26[df_fy26['version']=='QM-corrected']['error'].mean()
-pct = (1 - mae_qm / mae_raw) * 100
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
-
-# (a) Bar chart: raw vs QM
-bars = axes[0].bar(['Raw weather\n(corrupted)', 'QM-corrected\nweather'],
-                   [mae_raw, mae_qm], color=[ORANGE, BLUE], width=0.5)
-axes[0].bar_label(bars, fmt='%.3f', padding=3, fontsize=11)
-axes[0].set(ylabel='MAE of WIND Contract Factor', ylim=(0, mae_raw * 1.35))
-axes[0].set_title('FY26 fleet proxy (all 12 months)', loc='left', fontsize=10)
-axes[0].spines[['top', 'right']].set_visible(False)
-
-# (b) Monthly MAE comparison
-months = [str(m) for m in fy26_months]
-mae_raw_m = df_fy26[df_fy26['version']=='Raw data'].set_index('month')['error']
-mae_qm_m  = df_fy26[df_fy26['version']=='QM-corrected'].set_index('month')['error']
-x = np.arange(len(months))
-w = 0.35
-axes[1].bar(x - w/2, mae_raw_m.values, w, color=ORANGE, alpha=0.8, label='Raw data')
-axes[1].bar(x + w/2, mae_qm_m.values, w, color=BLUE, alpha=0.8, label='QM-corrected')
-
-for i, m in enumerate(fy26_months):
-    if bad_mask[(idx >= m.start_time) & (idx <= m.end_time)].any():
-        axes[1].axvspan(i - 0.45, i + 0.45, color=ORANGE, alpha=0.06)
-
-axes[1].set_xticks(x)
-axes[1].set_xticklabels([m[-2:] for m in months], fontsize=9)
-axes[1].set(xlabel='FY26 month', ylabel='MAE')
-axes[1].set_title('Monthly MAE: raw vs QM-corrected\n(shaded = corrupted months)',
-                  loc='left', fontsize=10)
-axes[1].legend(frameon=False, fontsize=8)
-axes[1].spines[['top', 'right']].set_visible(False)
-
-fig.tight_layout()
-add_titles(fig, 'Fig 8.2 – WIND Contract Factor: fleet proxy accuracy with raw vs QM-corrected weather (FY26)',
-           f'QM reduces the fleet proxy error by {pct:.0f}%')
 display(fig); plt.close(fig)
 ```

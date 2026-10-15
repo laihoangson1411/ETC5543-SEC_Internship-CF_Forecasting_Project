@@ -1,5 +1,5 @@
 """
-Data utilities for the WIND Contract Factor notebook.
+Data utilities.
 
 Timestamp cleaning, 30-min regridding, calendar features, generation loading
 (MLF and capacity scaling) and the monthly contract-factor target table.
@@ -61,17 +61,17 @@ def add_calendar_features(df: pd.DataFrame) -> pd.DataFrame:
 def load_weather_history(cfg: Dict, data_dir: str, apply_qm: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Load half-hourly weather from local CSVs; return (weather_wide, wind_raw).
 
-    Reads dtn_hist_30min.csv, solcast_hist_30min.csv and dtn_weather_89002_86338_qm.csv
-    from `data_dir`.
+    Reads raw/HistoricWeather_30min.csv, raw/HistoricSolarIrradiance_30min.csv and
+    processed/QM_HistoricWeather_30min.csv from `data_dir`.
 
     weather_wide has one column per metric and station (e.g. 'wind_speed_kph_89002'),
     plus wind speed in m/s, wind-direction sin/cos and solar columns, on a 30-min grid.
     If apply_qm is True, wind_speed_kph for stations 89002/86338 is overridden by the
     quantile-mapped (QM) file; set it to False to get the raw DTN data.
     """
-    wind_csv = os.path.join(data_dir, 'dtn_hist_30min.csv')
-    solar_csv = os.path.join(data_dir, 'solcast_hist_30min.csv')
-    qm_path = os.path.join(data_dir, 'dtn_weather_89002_86338_qm.csv')
+    wind_csv = os.path.join(data_dir, 'raw', 'HistoricWeather_30min.csv')
+    solar_csv = os.path.join(data_dir, 'raw', 'HistoricSolarIrradiance_30min.csv')
+    qm_path = os.path.join(data_dir, 'processed', 'QM_HistoricWeather_30min.csv')
 
     start, end = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
     stations = cfg['station_ids']
@@ -138,7 +138,7 @@ def load_weather_history(cfg: Dict, data_dir: str, apply_qm: bool = True) -> Tup
 
 def _read_vret(data_dir: str) -> pd.DataFrame:
     """Read VRET asset metadata, indexed by asset name (first column)."""
-    return pd.read_csv(os.path.join(data_dir, 'VRETAsset.csv'), index_col=0)
+    return pd.read_csv(os.path.join(data_dir, 'raw', 'Asset.csv'), index_col=0)
 
 
 def load_generation_inputs(cfg: Dict, data_dir: str):
@@ -146,7 +146,7 @@ def load_generation_inputs(cfg: Dict, data_dir: str):
 
     Args:
         cfg: Config dict (uses analysis window, wind_assets and solar_assets).
-        data_dir: Folder with the input CSVs.
+        data_dir: Data folder; input CSVs are read from its 'raw' subfolder.
 
     Returns:
         gen_scaled: Half-hourly generation (MLF- and capacity-scaled) for all assets plus VIC1Price.
@@ -156,20 +156,20 @@ def load_generation_inputs(cfg: Dict, data_dir: str):
     all_assets = cfg['wind_assets'] + cfg['solar_assets']
 
     # NEMSight data is time-ending; shift back 30 min to get time-starting
-    gen_raw = pd.read_csv(os.path.join(data_dir, 'NEMSight_VICVREGeneration_FY19-26_MW.csv'),
+    gen_raw = pd.read_csv(os.path.join(data_dir, 'raw', 'GenerationMW_FY19-26.csv'),
                           index_col=0, parse_dates=True)
     gen_raw.index = gen_raw.index - pd.Timedelta(minutes=30)
     gen_raw.index.name = 'Time-starting'
 
     vret = _read_vret(data_dir)
-    exclusion_periods = pd.read_csv(os.path.join(data_dir, 'ExclusionPeriods.csv'),
+    exclusion_periods = pd.read_csv(os.path.join(data_dir, 'raw', 'ExclusionPeriods.csv'),
                                     parse_dates=['ExclusionStart', 'ExclusionEnd'])
     # MLF table is indexed by financial year (used in the merge below)
     # FY label for each row of the MLF file (row 0 first); the CSV has no FY column
     MLF_FYS = [2022, 2023, 2024, 2025, 2026] 
 
     # MLF table: one row per FY, one column per asset
-    mlf = pd.read_csv(os.path.join(data_dir, 'AEMO_VICMLF_FY23-26.csv'))
+    mlf = pd.read_csv(os.path.join(data_dir, 'raw', 'MLF_FY23-26.csv'))
     mlf.index = pd.Index(MLF_FYS, name='FY')
 
     price_data = gen_raw['VIC1Price'].copy()

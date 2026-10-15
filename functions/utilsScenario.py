@@ -1,5 +1,5 @@
 """
-Scenario utilities for the WIND Contract Factor notebook.
+Scenario utilities.
 
 LGC-based shrink factor for negative prices, forward-curve TWAP, scenario feature
 rows (same calendar month of each training FY re-targeted to a TWAP), scenario

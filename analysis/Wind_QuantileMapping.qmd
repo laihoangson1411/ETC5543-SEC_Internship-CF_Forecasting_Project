@@ -18,7 +18,7 @@ jupyter: python3
 7. Save the corrected weather file
 8. Summary figures
 
-**Output:** `../data/dtn_weather_89002_86338_qm.csv`, read by the forecast notebook.
+**Output:** `../data/processed/QM_HistoricWeather_30min.csv`.
 
 
 ## 1. Set-up
@@ -41,12 +41,15 @@ import seaborn as sns
 
 warnings.filterwarnings('ignore')
 
-# Project functions live in ../functions (notebook runs from notebooks/)
-sys.path.append(os.path.abspath('../functions'))
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
 
 from utilsData import load_generation_inputs, load_weather_history, build_targets, _to_naive_timestamp
 
-DATA_DIR = '../data'  # folder with all input CSVs
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
 
 cfg = {
     'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
@@ -58,7 +61,7 @@ cfg = {
     'nearest_station_by_asset': {                 # weather station used for each wind farm
         'DUNDWF3': 89002, 'BRYB1WF1': 89002, 'BULGANA1': 89002, 'MRTLSWF1': 86338,
     },
-    'wind_csv': os.path.join(DATA_DIR, 'dtn_hist_30min.csv'),   # raw DTN wind/temperature (not QM)
+    'wind_csv': os.path.join(DATA_DIR, 'raw', 'HistoricWeather_30min.csv'),   # raw wind/temperature (not QM)
     'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
 }
 print('Configuration done. Wind assets:', cfg['wind_assets'])
@@ -1485,10 +1488,10 @@ for stn, col_qm in [(89002, 'ws_89002_qm'), (86338, 'ws_86338_qm')]:
 df_wide['qm_corrected'] = bad.astype(int)
 
 # ── (4) Save CSV ─────────────────────────────────────────────────
-out_dir = DATA_DIR
+out_dir = os.path.join(DATA_DIR, 'processed')
 os.makedirs(out_dir, exist_ok=True)
+fname = 'QM_HistoricWeather_30min.csv'
 
-fname = 'dtn_weather_89002_86338_qm.csv'
 fpath = os.path.join(out_dir, fname)
 df_wide.to_csv(fpath, index=True, index_label='datetime')
 print(f'\n✔ Saved: {fpath}')

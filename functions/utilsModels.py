@@ -1,5 +1,5 @@
 """
-Model utilities for the WIND Contract Factor notebook.
+Model utilities.
 
 One fit/predict function per model (`run_*`), the Exponential baseline, the runner
 `run_all_models`, forecast metrics and two prediction helpers for the scenario cells.

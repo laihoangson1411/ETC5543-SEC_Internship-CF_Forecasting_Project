@@ -36,8 +36,11 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 warnings.filterwarnings("ignore")
 
-# Project functions live in ../functions (notebook runs from notebooks/)
-sys.path.append(os.path.abspath('../functions'))
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
 
 # Data, model and scenario helpers (the other .py files are imported by these)
 from utilsContractFactors import getFY
@@ -47,7 +50,7 @@ from utilsModels import run_all_models, predict_method
 from utilsScenario import (shrink_factor, load_forward_twap_monthly, build_scenario_table,
                            predict_scenarios, monthly_depth, summarise)
 
-DATA_DIR = '../data'  # folder with all input CSVs
+DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/, processed/ and forecast/
 
 cfg = {
     'random_seed': 42,
@@ -110,7 +113,7 @@ np.random.seed(cfg['random_seed'])
 # plus `weather_raw` (long-format wind data).
 # =============================================================================
 
-weather_hh, weather_raw = load_weather_history(cfg, '../data')
+weather_hh, weather_raw = load_weather_history(cfg, DATA_DIR)
 print('Weather history rows:', len(weather_hh))
 ```
 
@@ -141,7 +144,7 @@ print('\nCapacity (MW):', {k: round(v, 1) for k, v in capacity.items()})
 
 # 1. Half-hourly VIC price forecast (Central scenario)
 price_forecast = pd.read_csv(
-    os.path.join(DATA_DIR, 'VIC_Central_30min_PriceForecast.csv'),
+    os.path.join(DATA_DIR, 'raw', 'PriceForecast_30min.csv'),
     parse_dates=['Time-ending'],
     dayfirst=True,  # dates are dd/mm/yyyy
 )
@@ -151,7 +154,7 @@ display(price_forecast.head())
 
 # 2. Monthly LGC / STC / VEEC certificate prices
 lgc_prices = pd.read_csv(
-    os.path.join(DATA_DIR, '20260424_HistoricLGCPrice.csv'),
+    os.path.join(DATA_DIR, 'raw', 'HistoricLGCPrice.csv'),
     index_col=0,
     parse_dates=True,
     dayfirst=True,

@@ -1,0 +1,206 @@
+---
+title: "Contract Factor Forecasting"
+subtitle: "ETC5543 - SEC Internship"
+date: 2026-10-21
+date-format: "DD/MM/YYYY"
+format:
+  revealjs:
+    width: 1280
+    height: 720
+    margin: 0
+    center: false
+    transition: none
+    controls: false
+    auto-stretch: false          # keep the image sizes set below
+    slide-number: true
+    embed-resources: true
+    title-slide-attributes:
+      data-background-image: images/title_background.png
+      data-background-size: cover
+    include-in-header:
+      text: |
+        <style>
+        /* Colours: purple text, orange accent, light lilac boxes (same palette as the plots) */
+        :root { --purple: #391B56; --orange: #E67E22; --lilac: #EBE7F0; }
+
+        /* Base: left-aligned purple text, 16 px body on a 1280 x 720 slide (= 12 pt in the pptx) */
+        .reveal { font-family: Aptos, Calibri, "Segoe UI", Arial, sans-serif; color: var(--purple); font-size: 16px; }
+        .reveal .slides section { text-align: left; padding: 19px 36px; box-sizing: border-box; color: var(--purple); }
+        .reveal .slides section h2 { font-size: 28px; font-weight: 700; color: var(--purple); text-transform: none;
+                                      margin: 0 0 14px 0; }
+        .reveal .slides section p { margin: 0 0 10px 0; line-height: 1.35; }
+        .reveal .slides section ul { margin: 0 0 10px 18px; }
+        .reveal .slides section li { margin: 0 0 7px 0; line-height: 1.35; }
+        .reveal .slides section li::marker { color: var(--purple); }
+        .reveal .slide-number { color: var(--purple); background: none; font-size: 12px; }
+
+        /* Title slide: white text on the purple / orange background */
+        #title-slide { text-align: left !important; top: 0 !important; padding: 270px 0 0 107px !important; }
+        #title-slide h1.title { color: #fff; font-size: 50px; font-weight: 400; margin: 0 0 24px 0; }
+        #title-slide .subtitle, #title-slide .date { color: #fff; font-style: italic; font-size: 30px; margin: 0 0 10px 0; }
+
+        /* Layout helpers: absolute position inside the slide (px on the 1280 x 720 canvas) */
+        .reveal .abs { position: absolute; }
+        .reveal img.abs { margin: 0; max-width: none; }
+        .reveal .box { position: absolute; background: var(--lilac); border-left: 4px solid var(--purple);
+                       padding: 10px 16px; box-sizing: border-box; font-size: 15px; line-height: 1.35; }
+        .reveal .box ul { margin: 0 0 0 16px; }
+        .reveal .box li { margin: 0 0 5px 0; }
+
+        /* Data dictionary tables (slides 5 and 6): purple header, thin purple row lines */
+        .reveal table.dd { border-collapse: collapse; width: 100%; font-size: 15px; margin: 0; }
+        .reveal table.dd th { background: var(--purple); color: #fff; text-align: left; padding: 5px 10px; font-weight: 700; }
+        .reveal table.dd td { padding: 11px 10px; border: 0; border-bottom: 1px solid var(--purple); vertical-align: middle;
+                              line-height: 1.3; }
+        .reveal table.dd tr:last-child td { border-bottom: 1px solid var(--purple); }   /* reveal removes the line under the last row */
+        .reveal table.dd td.grp { font-weight: 700; }
+        .reveal table.dd td.id { font-weight: 700; }
+        .reveal table.dd ul { margin: 0 0 0 16px; }
+        .reveal table.dd li { margin: 0 0 4px 0; }
+        .reveal .slides section p.foot { font-size: 15px; margin-top: 22px; }
+
+        /* Workflow diagram (slide 4) */
+        .reveal .wf-box { position: absolute; left: 293px; width: 257px; height: 42px; background: #E9E4F0; border-radius: 6px;
+                          display: flex; align-items: center; justify-content: center; text-align: center;
+                          font-weight: 700; font-size: 15px; line-height: 1.15; }
+        .reveal .wf-txt { position: absolute; left: 594px; width: 650px; line-height: 1.3; }
+        </style>
+---
+
+## What is Contract Factor?
+
+::: {style="width: 604px; margin-top: 22px;"}
+**What is Contract Factor and why is it important?**
+
+-   Wind and solar farms do not generate evenly, and the market price changes every 5 minute so the average price a farm earns is not the same as the average market price.
+-   Contract Factor (CF) compares the two: the higher the CF, the more the farm earns per MWh compared with the market average. The price a farm earns is measured the way SEC's VRET contracts pay: never below \$0, so negative prices count as \$0.
+-   SEC uses CF to forecast the revenue of its VRET wind and solar assets in the Corporate Model.
+
+**How Analytics defines and calculates CF for VRET wind and solar assets**
+
+<img src="images/formula_dwap.png" style="display: block; width: 494px; margin: 8px 0 6px 0;">
+<img src="images/formula_cf.png" style="display: block; width: 174px; margin: 0 0 12px 0;">
+
+-   DWAP: average price weighted by the asset's output, negative prices floored at \$0
+-   TWAP: average market price over the period
+-   CF is calculated for each month from 30-minute data.
+
+We use monthly CF throughout, because SEC calculates CF monthly, our price, LGC and weather inputs are monthly, and daily or weekly CF is much noisier.
+:::
+
+<img class="abs" src="images/monthly_CF.png" style="left: 651px; top: 81px; width: 593px;">
+
+## The recent CF forecasting model and its issues
+
+::: {style="width: 620px; margin-top: 12px;"}
+Exponential relationships fit between VIC1Price TWAP and CF, separately for each season
+
+-   For wind, the model captures a clear negative CF-TWAP relationship in summer, autumn and spring, but over-predicts the FY26 test months (MAE 0.31-0.36); winter is flat and fits well (0.052)
+-   For solar, the relationships are weak and the autumn curve extrapolates to implausible values.
+-   So TWAP alone is not reliable.
+
+**Our approach: This project extends the current model in two ways.**
+
+-   **Weather:** Capture performance depends on whether generation happens in the hours when prices are good. The current model has no information about when generation happens, so we introduce weather variables (irradiance, wind speed, temperature, humidity) as explanatory features.
+-   **Certificate price (LGC):** Historical negative prices were shaped by a certificate worth up to \$66. It is worth about \$8 today and the scheme ends in 2030, so the price structure has to be corrected before it can be used to forecast forward.
+:::
+
+<img class="abs" src="images/exponential.png" style="left: 668px; top: 47px; height: 603px;">
+
+## End-to-End Modelling Workflow
+
+<svg class="abs" style="left: 0; top: 0;" width="1280" height="720" viewBox="0 0 1280 720">
+<defs><marker id="ah" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#391B56"/></marker></defs>
+<g stroke="#391B56" stroke-width="1.6" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)">
+<line x1="422" y1="134" x2="422" y2="199"/><line x1="422" y1="243" x2="422" y2="308"/>
+<line x1="422" y1="351" x2="422" y2="417"/><line x1="422" y1="460" x2="422" y2="526"/>
+<path d="M293,439 H268 V222 H291"/>
+</g>
+</svg>
+
+<div class="wf-box" style="top: 92px;">Initial Data Analysis (IDA)</div>
+<div class="wf-box" style="top: 201px;">Data Processing</div>
+<div class="wf-box" style="top: 309px;">Exploratory Data Analysis (EDA)</div>
+<div class="wf-box" style="top: 418px;">Model Fitting</div>
+<div class="wf-box" style="top: 527px;">Forecasting</div>
+
+<div class="wf-txt" style="top: 99px;">Inventory 7 assets, 3 weather stations, check coverage and data quality</div>
+<div class="wf-txt" style="top: 206px;">Align, scale, build monthly features, correct corrupted wind speed</div>
+<div class="wf-txt" style="top: 306px;">Price shape, weather-CF relationships, variable screening<br>Decide which variables to be the inputs for the models</div>
+<div class="wf-txt" style="top: 402px;">Train: FY23-25, Test: FY26<br>Model: Seasonal Naïve, Linear, Ridge, RF, XGBoost, Ensemble<br>Ensemble the best models for improvement</div>
+<div class="wf-txt" style="top: 520px;">Direct forecasting and scenario forecasting<br>LGC adjustment</div>
+<div class="abs" style="left: 40px; top: 291px; width: 200px; text-align: right; line-height: 1.3;">Refine data treatment to improve accuracy</div>
+
+## Data dictionary
+
+<table class="dd">
+<tr><th>Type</th><th>ID</th><th>Location</th><th>Notes</th></tr>
+<tr><td class="grp" rowspan="4">Wind asset</td><td class="id">DUNDWF3</td><td>Dundonnell</td><td>Very clean history: only four 1-day exclusions.</td></tr>
+<tr><td class="id">BRYB1WF1</td><td>Berrybank</td><td>Six short exclusions (longest 12 days).</td></tr>
+<tr><td class="id">BULGANA1</td><td>Bulgana</td><td>Co-located battery (20 MW). Longest exclusion: Jun 2024 – Dec 2025 (578 days), plus other short ones.</td></tr>
+<tr><td class="id">MRTLSWF1</td><td>Mortlake</td><td>Not yet online before Jun 2023, so no usable data in FY23.</td></tr>
+<tr><td class="grp" rowspan="3">Solar asset</td><td class="id">WINTSF1</td><td>Winton</td><td>Two exclusions: Jul – Aug 2024 (61 days) and Nov 2024 – Jan 2025 (53 days).</td></tr>
+<tr><td class="id">GLENSF1</td><td>Glenrowan</td><td>Started operating late: data begins 1 Dec 2023</td></tr>
+<tr><td class="id">COHUNSF1</td><td>Cohuna</td><td>Many long exclusions, including Mar 2024 – Apr 2025 (376 days).</td></tr>
+<tr><td class="grp" rowspan="3">Weather Station</td><td class="id">89002</td><td>Ballarat Aerodrome</td>
+<td rowspan="3"><ul>
+<li><b>Wind:</b> 89002 and 86338 are averaged because their wind speed correlates with generation (r = 0.32 - 0.47). <b>85280 is excluded</b> because it is weak (r = 0.06 - 0.20).</li>
+<li><b>Solar:</b> all 3 stations are averaged because GHI correlations are almost identical (differences ≤ 0.02 for each asset), data quality checked.</li></ul></td></tr>
+<tr><td class="id">86338</td><td>Melbourne (Olympic Park)</td></tr>
+<tr><td class="id">85280</td><td>Latrobe Valley Airport</td></tr>
+</table>
+
+<p class="foot">We model CF at portfolio level (wind and solar), not asset by asset</p>
+
+## Data dictionary
+
+<table class="dd">
+<tr><th colspan="2">Variable</th><th>What it is</th><th>Why consider it</th></tr>
+<tr><td class="grp" rowspan="3">VIC1 Price</td><td class="id">twap</td><td>Monthly mean of half-hourly VIC1 price (1)</td><td>TWAP is the CF denominator, and the current method uses it</td></tr>
+<tr><td class="id">twap_neg</td><td>Mean price of the half-hours below $0</td><td>DWAP floors negatives at $0 but TWAP does not, so deeper negatives raise CF</td></tr>
+<tr><td class="id">twap_pos</td><td>Mean price of the half-hours at or above $0</td><td>Sets the level of the positive prices that make up DWAP</td></tr>
+<tr><td class="grp" rowspan="5">Weather</td><td class="id">wind_speed_kph</td><td>Monthly mean wind speed</td><td>Main driver of wind output <b>(calibrated)</b></td></tr>
+<tr><td class="id">temp_c</td><td>Monthly mean temperature</td><td>Related to air density and the seasonal cycle</td></tr>
+<tr><td class="id">rh</td><td>Relative humidity</td><td>Humid air is less dense, so wind carries slightly less power at the same wind speed</td></tr>
+<tr><td class="id">dp_c</td><td>Dew point</td><td>Direct measure of air moisture (unlike RH, it does not change with temperature).</td></tr>
+<tr><td class="id">rainfall_mm</td><td>Monthly rainfall</td><td>Rainy weather systems such as fronts and storms are often windy.</td></tr>
+<tr><td class="grp">Seasonality</td><td class="id">month_sin, month_cos</td><td>Month of the year as a circle (seasonal shape)</td><td>Captures the seasonal pattern of prices and generation</td></tr>
+</table>
+
+<p class="foot">\(1\) Monthly mean TWAP includes both positives and negatives</p>
+
+## Calibrate data: Wind_speed_kph
+
+<div class="box" style="left: 36px; top: 125px; width: 596px; height: 152px;">
+<ul>
+<li>DTN wind speed data for stations 89002 &amp; 86338 suffered systematic amplitude compression from 7/10/2025 – 14/4/2026 (6 months, 8,448 half-hours)</li>
+<li>Critically, <b>temporal rank order is preserved</b>: Spearman correlation with actual generation barely changed (89002: 0.474 → 0.479; 86338: 0.316 → 0.368). This means the signal is recoverable.</li>
+</ul>
+</div>
+
+<div class="box" style="left: 36px; top: 451px; width: 596px; height: 152px;">
+<b>⇒ Correction method - Quantile Mapping (QM):</b> a standard technique in meteorology for bias-correcting climate data. Each corrupted value is mapped to the same percentile in the clean historical distribution, stratified by (month x half-hour of day) to respect seasonal and diurnal wind patterns. Reference period: Oct-Mar of FY23-25 (3 clean years)
+</div>
+
+<img class="abs" src="images/wind_speed_corruption.png" style="left: 648px; top: 42px; width: 569px;">
+<img class="abs" src="images/wind_speed_after_qm.png" style="left: 656px; top: 372px; width: 561px;">
+
+## EDA after QM correcting
+
+::: {style="width: 509px; margin-top: 8px;"}
+-   For Wind, we kept the variables most correlated with WIND_CF (twap_neg −0.84, month_cos 0.81, rh −0.60, wind_speed_kph as the physical driver) and dropped redundant ones (twap, temp_c, dp_c) and uncorrelated ones (rainfall_mm).
+-   We then checked multicollinearity with VIF to confirm the final six inputs do not overlap.
+-   **Wind features: wind_speed_kph, twap_neg, twap_pos, rh, month_sin, month_cos**
+:::
+
+<img class="abs" src="images/wind_correlation.png" style="left: 544px; top: 38px; height: 602px;">
+
+## Negative prices and the certificate that sets their floor
+
+-   FY26: **26%** of half-hours below \$0, up from **20%** in FY23, and **56%** of them sit in the shallow −\$10 to \$0 band
+-   Why: **Supply and demand decide when prices go negative. The certificate decides how deep.**
+-   LGC = one certificate per MWh of renewable generation; retailers are legally required to buy them; scheme ends 31 Dec 2030
+-   LGC fell from \~\$32 (FY25 avg) to \~\$6 by Jun 2026 (**−82%**), so the floor has lifted toward zero and negative prices are getting shallower
+
+<img class="abs" src="images/negative_price_share.png" style="left: 36px; top: 245px; width: 589px;">
+<img class="abs" src="images/lgc_price_vs_neg_twap.png" style="left: 655px; top: 245px; width: 589px;">

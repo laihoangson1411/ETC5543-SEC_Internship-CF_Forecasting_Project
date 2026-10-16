@@ -278,34 +278,6 @@ add_check(f'Assets with a flat non-zero run of {FLAT_LIMIT}+ half-hours', (gen_t
 add_check('Missing half-hours (commissioning and exclusion periods)', gen_tbl['missing half-hours'].sum(), info=True)
 ```
 
-```{python}
-import calendar
-
-SLOTS = [f'{h:02d}:{m:02d}' for h in NIGHT_HOURS for m in (0, 30)]      # 21:00 ... 04:30
-rows = []
-for a in cfg['solar_assets']:
-    g = gen_scaled[a]
-    hit = g[idx.hour.isin(NIGHT_HOURS) & (g > capacity[a] * 0.5 * 0.01)]
-    rows.append(pd.DataFrame({'asset': a, 'slot': hit.index.strftime('%H:%M'), 'month': hit.index.month}))
-hits = pd.concat(rows, ignore_index=True)
-
-by_slot = pd.crosstab(hits['slot'], hits['asset']).reindex(SLOTS, fill_value=0)
-by_month = pd.crosstab(hits['month'], hits['asset']).reindex(range(1, 13), fill_value=0)
-by_month.index = [calendar.month_abbr[m] for m in by_month.index]
-
-if len(hits):
-    early = hits['slot'].isin(['04:00', '04:30']).mean() * 100
-    top = hits['month'].value_counts().head(3).index
-    note = f'{early:.0f}% of the readings are at 04:00-04:30; most are in {", ".join(calendar.month_abbr[m] for m in sorted(top))}'
-else:
-    note = 'No solar generation at night'
-
-table_title('Table 5.1b – Solar-at-night half-hours by clock time', note)
-display(by_slot)
-table_title('Table 5.1c – Solar-at-night half-hours by calendar month')
-display(by_month)
-```
-
 ### 5.2 Exclusion periods and availability
 
 One bar per asset (wind on top, solar below) over the analysis window, from `ExclusionPeriods.csv`:

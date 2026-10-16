@@ -1,24 +1,12 @@
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# Date helpers: financial quarter (FQ), financial year (FY) and season
+# Date helpers: financial year (FY) and season
 # ---------------------------------------------------------------------------
-
-def getFQ(ds): 
-    """ Derive Financial Quarter from Datetime""" 
-    fq = pd.PeriodIndex(ds, freq='Q-JUN').strftime('%q').astype(int)
-    # if ds._typ == 'datetimeindex':
-    #     fq = np.where(ds.month <= 6, ds.quarter+2, ds.quarter-2)
-    # else:  
-    #     fq = np.where(ds.dt.month <= 6, ds.dt.quarter+2, ds.dt.quarter-2)
-    return fq
-
 
 def getFY(ds):  
     """ Derive Financial Year from Datetime"""
-    fy = pd.PeriodIndex(ds, freq='Y-JUN').strftime('%Y').astype(int)
-    # fy = np.where(ds.dt.month <= 6, ds.dt.year, ds.dt.year+1)
-    return fy
+    return pd.PeriodIndex(ds, freq='Y-JUN').strftime('%Y').astype(int)
 
 
 
@@ -58,11 +46,9 @@ def convertUnits(df:pd.DataFrame, origUnits:str, outputUnits:str):
     if intervals.nunique() != 1:
         raise Exception('Datetime index is not uniform - check for missing data!')
 
-    if origUnits in ['kWh', 'MWh'] and outputUnits in ['kWh', 'MWh']:
-        # If converting Energy to Energy, simple conversion factor 
-        conversionFactor = unitDict[origUnits] / unitDict[outputUnits]
-    elif origUnits in ['kW', 'MW'] and outputUnits in ['kW', 'MW']:
-        # If converting Power to Power, simple conversion factor 
+    energy, power = ['kWh', 'MWh'], ['kW', 'MW']
+    if (origUnits in energy and outputUnits in energy) or (origUnits in power and outputUnits in power):
+        # Energy to energy or power to power: simple conversion factor
         conversionFactor = unitDict[origUnits] / unitDict[outputUnits]
     elif origUnits in ['kWh', 'MWh'] and outputUnits in ['kW', 'MW', 'TW']:
         # If converting Energy to Power, apply interval conversion
@@ -156,11 +142,9 @@ def calcMonthlyContractFactors(generationTrace, assets, capacity, extraCol=None,
         else:
             tempGenerationTrace = generationTrace[[asset, 'VIC1Price']]
         
-        # Calculate Revenue (Volume * Price) with zero dollar floor flag
-        if zeroDollarFloor:
-            tempGenerationTrace.loc[:,[f'{asset}_ContractRevenue']] = tempGenerationTrace[asset] * tempGenerationTrace['VIC1Price'].clip(lower=0)
-        else:
-            tempGenerationTrace.loc[:,[f'{asset}_ContractRevenue']] = tempGenerationTrace[asset] * tempGenerationTrace['VIC1Price']
+        # Calculate Revenue (Volume * Price); the contract revenue floors the price at $0 if zeroDollarFloor
+        contract_price = tempGenerationTrace['VIC1Price'].clip(lower=0) if zeroDollarFloor else tempGenerationTrace['VIC1Price']
+        tempGenerationTrace.loc[:,[f'{asset}_ContractRevenue']] = tempGenerationTrace[asset] * contract_price
         tempGenerationTrace.loc[:,[f'{asset}_MarketRevenue']] = tempGenerationTrace[asset] * tempGenerationTrace['VIC1Price']
         
         # Calculate Capacity Factor (Convert Volume to MW / Capacity in MW)
@@ -207,61 +191,3 @@ def aggregateContractFactorsByGenType(weightedContractFactors, assets, genType, 
             weightedContractFactors[f'{genType}{col}'] = weightedContractFactors[assetsKey].mul(weightedContractFactors[assets].values).sum(axis=1) / weightedContractFactors[assets].sum(axis=1)
 
     return weightedContractFactors
-
-
-def aggregateContractFactorsByPeriod(weightedContractFactors, assets, cols:dict = cols_default, period:str = 'ME'):
-    '''
-    Aggregate contract factors by defined period (month, quarter, year, etc.).
-
-    Parameters:
-        weightedContractFactors (pd.DataFrame): DataFrame of contract factors.
-        assets (list): List of asset column names.
-        cols (dict): Dictionary specifying aggregation method for each column.
-        period (str): Period type ('ME', 'QE', 'QE-JUN', 'YE', 'YE-JUN', 'MAX').
-
-    Returns:
-        pd.DataFrame: DataFrame with contract factors aggregated by period.
-    '''
-    assert period in ['ME', 'QE', 'QE-JUN', 'YE', 'YE-JUN', 'MAX'], 'Period not defined' 
-    
-    if period == 'ME':
-        weightedContractFactors['AvePeriod'] = weightedContractFactors.index.month
-    elif period == 'QE':
-        weightedContractFactors['AvePeriod'] = weightedContractFactors.index.quarter
-    elif period == 'QE-JUN':
-        weightedContractFactors['AvePeriod'] = getFQ(weightedContractFactors.index)
-    elif period == 'YE':
-        weightedContractFactors['AvePeriod'] = weightedContractFactors.index.year
-    elif period == 'YE-JUN':
-        weightedContractFactors['AvePeriod'] = getFY(weightedContractFactors.index)
-    elif period == 'MAX':
-        weightedContractFactors['AvePeriod'] = 'Total'
-
-    # Setup the framework for the average DF
-    contractFactorAverageAgg = pd.DataFrame()
-    contractFactorAverageAgg['VIC1Price_TWAP'] = weightedContractFactors.loc[:,['AvePeriod', 'VIC1Price_TWAP']].groupby(['AvePeriod']).mean()
-
-    # Loop through each asset to calculate average statistics
-    for asset in assets:
-        tempContractFactor = weightedContractFactors.filter(regex=f'{asset}|VIC1Price|AvePeriod', axis=1).copy(deep=True)
-        # Use the cols dictionary to create a 'Weighted' column for resampling
-        for col in cols.keys():
-            if cols[col] == 'WeightedMean':
-                tempContractFactor[f'{asset}{col}Weighted'] = tempContractFactor[f'{asset}{col}'] * tempContractFactor[asset]
-            else:
-                tempContractFactor[f'{asset}{col}TempMean'] = tempContractFactor[f'{asset}{col}']
-        
-        contractFactorAverage = tempContractFactor.groupby(['AvePeriod']).apply(custom_agg)
-        # Use the cols dictionary to re-calculate statistics using the average Weighted column then drop
-        contractFactorAverage[f'{asset}Agg'] = contractFactorAverage[asset]
-        for col in cols.keys():
-            if cols[col] == 'WeightedMean':
-                contractFactorAverage[f'{asset}{col}'] = contractFactorAverage[f'{asset}{col}Weighted'] / contractFactorAverage[f'{asset}Agg']
-                contractFactorAverage = contractFactorAverage.drop(columns=[f'{asset}{col}Weighted'])
-            else:
-                contractFactorAverage[f'{asset}{col}'] = contractFactorAverage[f'{asset}{col}TempMean']
-                contractFactorAverage = contractFactorAverage.drop(columns=[f'{asset}{col}TempMean'])
-        
-        contractFactorAverageAgg = pd.concat([contractFactorAverageAgg, contractFactorAverage.drop(columns=['VIC1Price_TWAP', 'AvePeriod'])], axis=1)
-
-    return contractFactorAverageAgg

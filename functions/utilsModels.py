@@ -1,8 +1,8 @@
 """
 Model utilities.
 
-One fit/predict function per model (`run_*`), the Exponential baseline, the runner
-`run_all_models`, forecast metrics and two prediction helpers for the scenario cells.
+One fit/predict function per weather-driven model (`run_*`, listed in MODEL_FNS), the Exponential
+baseline, the runner `run_all_models`, forecast metrics and the prediction helpers of the scenario cells.
 Model settings are read from the `cfg` dict, so nothing here depends on notebook globals.
 """
 
@@ -15,24 +15,9 @@ from sklearn.linear_model import LinearRegression, RidgeCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from statsmodels.tsa.statespace.sarimax import SARIMAX
+from xgboost import XGBRegressor          # on macOS XGBoost also needs OpenMP: brew install libomp
 
 from utilsContractFactors import expfunctionCF
-
-# Optional boosting libraries: flags let the run_* functions return NaN if missing
-try:
-    from xgboost import XGBRegressor
-    HAS_XGBOOST = True
-except Exception:
-    HAS_XGBOOST = False
-    XGBRegressor = None
-
-try:
-    from lightgbm import LGBMRegressor
-    HAS_LGBM = True
-except Exception:
-    HAS_LGBM = False
-    LGBMRegressor = None
 
 
 def calculate_metrics(actual: pd.Series, pred: pd.Series) -> Dict[str, float]:
@@ -68,14 +53,6 @@ def run_ridge(train, test, feats, target_col, cfg):
     return pd.Series(pred, index=test.index), m
 
 
-def run_lgbm(train, test, feats, target_col, cfg):
-    """LightGBM regressor (NaN output if the library is missing)."""
-    if not HAS_LGBM:
-        return pd.Series(np.nan, index=test.index), None
-    m = LGBMRegressor(**cfg['lgbm_params']).fit(train[feats], train[target_col])
-    return pd.Series(m.predict(test[feats]), index=test.index), m
-
-
 def run_rf(train, test, feats, target_col, cfg):
     """Random forest regressor."""
     m = RandomForestRegressor(**cfg['rf_params']).fit(train[feats], train[target_col])
@@ -83,32 +60,13 @@ def run_rf(train, test, feats, target_col, cfg):
 
 
 def run_xgb(train, test, feats, target_col, cfg):
-    """XGBoost regressor (NaN output if the library is missing)."""
-    if not HAS_XGBOOST:
-        return pd.Series(np.nan, index=test.index), None
+    """XGBoost regressor."""
     m = XGBRegressor(**cfg['xgb_params']).fit(train[feats], train[target_col])
     return pd.Series(m.predict(test[feats]), index=test.index), m
 
 
-def run_sarimax(train, test, feats, target_col, cfg):
-    """SARIMAX with the features as exogenous variables; forecasts the test rows.
-
-    The series is fitted on a plain integer index so that gaps (rows dropped for
-    missing features) do not break the time-series index checks.
-    """
-    try:
-        fit = SARIMAX(train[target_col].reset_index(drop=True), exog=train[feats].reset_index(drop=True),
-                      order=cfg['sarimax_order'], enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
-        pred = fit.forecast(steps=len(test), exog=test[feats].values)
-        return pd.Series(np.asarray(pred), index=test.index), fit
-    except Exception as e:
-        print(f'  SARIMAX failed: {e}')
-        return pd.Series(np.nan, index=test.index), None
-
-
 # Weather-driven models fitted by run_all_models (name -> function)
-MODEL_FNS = {'Linear': run_linear, 'Ridge': run_ridge, 'LightGBM': run_lgbm,
-             'SARIMAX': run_sarimax, 'RF': run_rf, 'XGBoost': run_xgb}
+MODEL_FNS = {'Linear': run_linear, 'Ridge': run_ridge, 'RF': run_rf, 'XGBoost': run_xgb}
 
 
 def fit_exponential(df, target_col, twap_col, season_col, train_fys):
@@ -127,25 +85,30 @@ def fit_exponential(df, target_col, twap_col, season_col, train_fys):
         except Exception:
             params[season] = {'a': np.nan, 'b': np.nan}
 
-    pred = pd.Series(np.nan, index=df.index)
+    return pd.Series(predict_exponential(params, df[season_col], df[twap_col]), index=df.index), params
+
+
+def predict_exponential(params, seasons, twap):
+    """CF from the per-season curves of fit_exponential, evaluated at `twap` (NaN where a season has no fit)."""
+    seasons, twap = np.asarray(seasons), np.asarray(twap, dtype=float)
+    out = np.full(len(twap), np.nan)
     for season, p in params.items():
-        if np.isnan(p['a']):
-            continue
-        mask = df[season_col] == season
-        pred.loc[mask] = expfunctionCF(df.loc[mask, twap_col], p['a'], p['b'])
-    return pred, params
+        mask = seasons == season
+        if mask.any() and not np.isnan(p['a']):
+            out[mask] = expfunctionCF(twap[mask], p['a'], p['b'])
+    return out
 
 
 def run_all_models(df, cfg, features, target_col='target'):
     """Fit all models on cfg['train_fys'] and evaluate them on cfg['test_fys'].
 
-    Models: Seasonal Naive, Exponential, the six weather-driven models in `features`,
-    and the Ensemble (mean of RF and XGBoost).
+    Models: Seasonal Naive, Exponential, every weather-driven model named in `features` (a key of
+    MODEL_FNS), and the Ensemble (mean of RF and XGBoost) when both of them are fitted.
 
     Args:
         df: Monthly feature table (needs FY, Season, twap, CF_lag12 and the target).
         cfg: Config dict (train/test FYs and model settings).
-        features: Dict model name -> feature list.
+        features: Dict model name -> feature list; only these models are fitted.
         target_col: Target column in df.
 
     Returns:
@@ -165,7 +128,8 @@ def run_all_models(df, cfg, features, target_col='target'):
                              'feats': ['twap']}
 
     # Weather-driven models: drop rows with a missing feature before fitting
-    for name, fn in MODEL_FNS.items():
+    for name in features:
+        fn = MODEL_FNS[name]
         feats = [c for c in features[name] if c in df.columns]
         tr = train.dropna(subset=feats + [target_col])
         te = test.dropna(subset=feats)
@@ -176,8 +140,9 @@ def run_all_models(df, cfg, features, target_col='target'):
         fitted[name] = {'pred': pred.reindex(test.index), 'model': mdl, 'feats': feats}
 
     # Ensemble: simple average of RF and XGBoost
-    fitted['Ensemble'] = {'pred': (fitted['RF']['pred'] + fitted['XGBoost']['pred']) / 2,
-                          'model': None, 'feats': fitted['RF']['feats']}
+    if 'RF' in fitted and 'XGBoost' in fitted:
+        fitted['Ensemble'] = {'pred': (fitted['RF']['pred'] + fitted['XGBoost']['pred']) / 2,
+                              'model': None, 'feats': fitted['RF']['feats']}
 
     # Metrics on the test months
     actual = df.loc[test.index, target_col]

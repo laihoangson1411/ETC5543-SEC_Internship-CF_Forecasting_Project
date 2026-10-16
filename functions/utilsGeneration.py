@@ -18,24 +18,6 @@ cleanDictDefault = {'BULGANA1':dt.datetime(2021,10,1),
                     'GLENSF1':dt.datetime(2024,4,1),
                     'Fulham Solar Farm':dt.datetime(2027,11,17)}
 
-# Aggregate to Monthly
-def aggregate_generation_monthly(genData:pd.DataFrame,assetCols:list,solarHours:pd.DataFrame = pd.DataFrame()):
-    genDataAgg = genData.resample('ME',origin='end_day').agg({col: ['sum', 'count'] for col in genData.columns})
-    genDataAgg.columns = ['_'.join(col).strip() for col in genDataAgg.columns]
-    genDataAgg['periodsMonth'] = genDataAgg.index.days_in_month*24*2
-    genDataAgg = genDataAgg.merge(solarHours, left_index=True, right_index=True, how='left')
-
-    for asset in assetCols:
-        if (not solarHours.empty) and (asset in solarAssets):
-            genDataAgg['{}_std'.format(asset)] = genDataAgg['{}_sum'.format(asset)] * ((genDataAgg['SolarHours']) / genDataAgg['{}_count'.format(asset)])
-        else:
-            genDataAgg['{}_std'.format(asset)] = genDataAgg['{}_sum'.format(asset)] * ((genDataAgg['periodsMonth']) / genDataAgg['{}_count'.format(asset)])
-
-    return genDataAgg
-    
-    # return solarHours
-
-
 def filter_generation_data(generationData:pd.DataFrame,
                            exclusionPeriods:pd.DataFrame,extendExclusions:bool = False,
                            assets:list = assetsDefault,cleanDict:dict = cleanDictDefault):
@@ -63,7 +45,7 @@ def filter_generation_data(generationData:pd.DataFrame,
         if asset in list(exclusionPeriods['DUID'].unique()):
             for idx, exclusion in exclusionPeriods[exclusionPeriods['DUID'] == asset].iterrows():
                 filterExclusion = ((df.index >= exclusion['ExclusionStart']) & (df.index <= exclusion['ExclusionEnd']))
-                filterDate = filterDate & [not v for v in filterExclusion]
+                filterDate = filterDate & ~filterExclusion
             print("...data points filtered for commissioning & exclusions : {} ({}%)".format(len(df) - filterDate.sum(),np.round(((len(df) - filterDate.sum())/len(df))*100)))
         
         dfAsset = df[filterDate] 

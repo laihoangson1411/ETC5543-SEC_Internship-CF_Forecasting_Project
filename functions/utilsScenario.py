@@ -1,16 +1,15 @@
 """
 Scenario utilities.
 
-LGC-based shrink factor for negative prices, forward-curve TWAP, scenario feature
-rows (same calendar month of each training FY re-targeted to a TWAP), scenario
-predictions and small helpers. All inputs are passed as arguments.
+LGC price and the LGC-based shrink factor for negative prices, the price forecast (half-hourly and monthly TWAP),
+and the scenario feature rows (same calendar month of each training FY re-targeted to a TWAP).
+All inputs are passed as arguments.
 """
 
 import pandas as pd
 import numpy as np
 
 from utilsData import month_end_labels
-from utilsModels import predict_method
 
 
 def shrink_factor(m_hist, m_future, lgc_m, mode, depth_ab):
@@ -41,17 +40,57 @@ def shrink_factor(m_hist, m_future, lgc_m, mode, depth_ab):
     return float(np.clip(f, 0.0, 1.0))
 
 
-def load_forward_twap_monthly(path: str) -> pd.Series:
-    """Monthly TWAP of the 30-min forward price curve.
+def load_lgc_monthly(path: str) -> pd.Series:
+    """Monthly LGC price on a month-start index (the keys used by shrink_factor).
 
-    The file has a 'Time-ending' timestamp (dd/mm/yyyy h:mm) and a 'Price' column.
-    Each half-hour belongs to the month in which it STARTS (end - 30 min). The index
-    uses month_end_labels(), like the other monthly tables.
+    utf-8-sig strips the BOM that Excel adds to CSV files.
+    """
+    lgc = pd.read_csv(path, index_col=0, parse_dates=True, dayfirst=True, encoding='utf-8-sig')
+    return lgc['LGC'].resample('MS').mean().rename('lgc')
+
+
+def fit_depth_model(price: pd.Series, lgc: pd.Series, how=0.05) -> dict:
+    """Fit depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist.
+
+    depth is monthly_depth(price, how); a is the non-LGC floor and b the LGC pass-through,
+    the (a, b) pair used by shrink_factor.
+
+    Returns:
+        dict with a, b, months, r_raw (correlation of depth and LGC), r_within (mean correlation
+        within each season: 0=DJF, 1=MAM, 2=JJA, 3=SON) and `data` (depth, lgc, sin, cos, season).
+    """
+    d = pd.concat([monthly_depth(price, how), lgc], axis=1).dropna()
+    d = d[d.index <= price.index.max()]
+    month_num = d.index.month
+    d['sin'] = np.sin(2 * np.pi * month_num / 12)
+    d['cos'] = np.cos(2 * np.pi * month_num / 12)
+    d['season'] = month_num % 12 // 3
+    X = np.column_stack([np.ones(len(d)), d['lgc'], d['sin'], d['cos']])
+    coef, *_ = np.linalg.lstsq(X, d['depth'].values, rcond=None)
+    r_within = np.nanmean([g['depth'].corr(g['lgc']) for _, g in d.groupby('season')])
+    return {'a': coef[0], 'b': coef[1], 'months': len(d), 'r_raw': d['depth'].corr(d['lgc']),
+            'r_within': r_within, 'data': d}
+
+
+def load_forecast_price_hh(path: str) -> pd.Series:
+    """Half-hourly price forecast on a time-starting index, like the generation data.
+
+    The file has a 'Time-ending' timestamp (dd/mm/yyyy h:mm) and a 'Price' column;
+    each half-hour is moved back 30 min so it is labelled by its start.
     """
     fc = pd.read_csv(path)
     fc['Time-ending'] = pd.to_datetime(fc['Time-ending'], format='%d/%m/%Y %H:%M')
     start = fc['Time-ending'] - pd.Timedelta(minutes=30)
-    price = pd.Series(fc['Price'].values, index=pd.DatetimeIndex(start), name='Price').sort_index()
+    return pd.Series(fc['Price'].values, index=pd.DatetimeIndex(start, name='Time-starting'), name='Price').sort_index()
+
+
+def load_forecast_twap_monthly(path: str) -> pd.Series:
+    """Monthly TWAP of the 30-min price forecast.
+
+    Each half-hour belongs to the month in which it STARTS (see load_forecast_price_hh).
+    The index uses month_end_labels(), like the other monthly tables.
+    """
+    price = load_forecast_price_hh(path)
     labels = month_end_labels(price.index)
 
     # Completeness check: each month should have days_in_month * 48 half-hours
@@ -60,7 +99,7 @@ def load_forward_twap_monthly(path: str) -> pd.Series:
     if len(bad) > 0:
         print(f'WARNING: {len(bad)} months with an unexpected number of half-hours:')
         print(bad.head().to_string())
-    return price.groupby(labels).mean().rename('twap_forward')
+    return price.groupby(labels).mean().rename('twap_forecast')
 
 
 def build_scenario_features(d, m_h, m_f, twap_target, ns, adjust_neg, lgc_m, mode, depth_ab):
@@ -87,9 +126,9 @@ def build_scenario_features(d, m_h, m_f, twap_target, ns, adjust_neg, lgc_m, mod
     # 1) Negative level: shrink by the LGC factor, or keep the historical level
     tn_adj = tn_h
     if adjust_neg and pd.notna(tn_h):
-        m_h_s = pd.Timestamp(year=m_h.year, month=m_h.month, day=1)
-        m_f_s = pd.Timestamp(year=m_f.year, month=m_f.month, day=1)
-        tn_adj = tn_h * shrink_factor(m_h_s, m_f_s, lgc_m, mode, depth_ab)
+        # lgc_m is on a month-start index
+        tn_adj = tn_h * shrink_factor(m_h.to_period('M').to_timestamp(), m_f.to_period('M').to_timestamp(),
+                                      lgc_m, mode, depth_ab)
 
     # 2) Scale ONLY the positive prices to hit the TWAP target
     neg_part = ns * tn_adj if pd.notna(tn_adj) else 0.0
@@ -119,7 +158,10 @@ def build_scenario_table(d, ns_s, t_target, scenario_fys, lgc_m, mode, depth_ab,
         lgc_m, mode, depth_ab: LGC settings passed on to shrink_factor.
         versions: (tag, adjust_neg) pairs to build.
 
-    Meta columns start with '_' (_month, _fy, _version, _actual, _T).
+    Meta columns start with '_' (_month, _fy, _version, _actual, _T). _actual is NaN for a month
+    that is not in d (a future month).
+    The scenario rows are copies of the historical month m_h, so every feature not touched by
+    build_scenario_features (weather, month_sin/cos, ...) keeps its historical value.
     """
     rows = []
     for m_f in t_target.index:
@@ -132,14 +174,9 @@ def build_scenario_table(d, ns_s, t_target, scenario_fys, lgc_m, mode, depth_ab,
             for tag, adj in versions:
                 row = build_scenario_features(d, m_h, m_f, t_target[m_f], ns_s.loc[m_h], adj, lgc_m, mode, depth_ab)
                 row.update({'_month': m_f, '_fy': fy, '_version': tag,
-                            '_actual': d.loc[m_f, 'target'], '_T': t_target[m_f]})
+                            '_actual': d['target'].get(m_f, np.nan), '_T': t_target[m_f]})
                 rows.append(row)
     return pd.DataFrame(rows)
-
-
-def predict_scenarios(fitted, scen, model_order):
-    """Predict CF for every scenario row with each model in `model_order`; returns {method: array}."""
-    return {m: predict_method(fitted, m, scen) for m in model_order if fitted[m]['model'] is not None or m == 'Ensemble'}
 
 
 def monthly_depth(price, how):
@@ -147,11 +184,3 @@ def monthly_depth(price, how):
     if how == 'neg_mean':
         return (-price.where(price < 0).resample('MS').mean()).rename('depth')
     return (-price.resample('MS').quantile(how)).rename('depth')
-
-
-def summarise(scen, pred):
-    """Median over scenario FYs per month; return mean forecast, MAE and mean actual over months."""
-    tmp = scen[['_month', '_actual']].copy()
-    tmp['pred'] = pred
-    pm = tmp.groupby('_month').agg(pred=('pred', 'median'), actual=('_actual', 'first'))
-    return pm['pred'].mean(), (pm['pred'] - pm['actual']).abs().mean(), pm['actual'].mean()

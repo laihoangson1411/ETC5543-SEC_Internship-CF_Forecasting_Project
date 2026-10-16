@@ -12,6 +12,7 @@ format:
     transition: none
     controls: false
     auto-stretch: false          # keep the image sizes set below
+    pdf-max-pages-per-slide: 1   # PDF export: one page per slide, even if a slide is taller than the page
     slide-number: true
     embed-resources: true
     title-slide-attributes:
@@ -64,6 +65,12 @@ format:
                           display: flex; align-items: center; justify-content: center; text-align: center;
                           font-weight: 700; font-size: 15px; line-height: 1.15; }
         .reveal .wf-txt { position: absolute; left: 594px; width: 650px; line-height: 1.3; }
+        /* Bulleted text placed at a fixed position (slide 10) */
+        .reveal .bul { position: absolute; padding-left: 20px; box-sizing: border-box; line-height: 1.35; }
+        .reveal .bul::before { content: "•"; position: absolute; left: 4px; }
+        .reveal table.ex { width: 719px; font-size: 15px; }
+        .reveal table.ex td { padding: 7px 10px; }
+        .reveal table.ex th { padding: 4px 10px; }
         </style>
 ---
 
@@ -204,3 +211,27 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 <img class="abs" src="images/negative_price_share.png" style="left: 36px; top: 245px; width: 589px;">
 <img class="abs" src="images/lgc_price_vs_neg_twap.png" style="left: 655px; top: 245px; width: 589px;">
+
+## Adjusting replayed prices for a cheaper certificate
+
+<div class="bul" style="left: 36px; top: 59px; width: 1208px;"><b>The problem:</b> Our long-horizon forecast reuses the monthly price structure (negative TWAP, positive TWAP, negative share) of past years. FY23–24 had a certificate around \$50, so their negative prices were far deeper than FY27–29 will see (LGC ~\$8). Replaying that structure unchanged overstates the zero-dollar-floor benefit in CF.</div>
+
+<div class="bul" style="left: 36px; top: 108px;"><b>Step 1: Shrink the negative half-hours</b></div>
+<img class="abs" src="images/formula_step1.png" style="left: 76px; top: 144px; width: 485px;">
+<div class="abs" style="left: 69px; top: 202px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
+
+<div class="bul" style="left: 36px; top: 280px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
+<img class="abs" src="images/formula_step2.png" style="left: 97px; top: 310px; width: 438px;">
+<div class="abs" style="left: 94px; top: 374px;">Note that:</div>
+<img class="abs" src="images/formula_twap.png" style="left: 98px; top: 393px; width: 260px;">
+
+<div class="bul" style="left: 36px; top: 437px;"><b>Example:</b> replaying January 2023 into January 2028</div>
+<div class="abs" style="left: 280px; top: 469px;">
+<table class="dd ex">
+<tr><th></th><th>Historical</th><th>After adjustment</th></tr>
+<tr><td>LGC</td><td><b>\$52</b></td><td><b>\$8</b> (forecast)</td></tr>
+<tr><td>Negative half-hours (27% of month)</td><td>avg <b>-\$42.55</b></td><td>avg <b>-\$21.68</b> (s = 0.51)</td></tr>
+<tr><td>Positive half-hours</td><td>avg <b>\$80.96</b></td><td>avg <b>\$102.03</b> (k = 1.26)</td></tr>
+<tr><td>Monthly TWAP</td><td>\$48.09</td><td><b>\$69.11</b> ( = monthly forecasted price)</td></tr>
+</table>
+</div>

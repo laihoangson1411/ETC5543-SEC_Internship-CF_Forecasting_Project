@@ -1,0 +1,17 @@
+# Quarto project: `quarto render` (from this folder) runs the whole pipeline in the order below,
+# because each notebook reads the files written by the ones before it (see README.md).
+project:
+  type: default
+  render:
+    - analysis/IDA_ContractFactors.qmd          # -> data/processed/HistoricContractFactors.csv
+    - analysis/IDA_Weather_SolarIrradiance.qmd
+    - analysis/Wind_QuantileMapping.qmd         # -> data/processed/QM_HistoricWeather_30min.csv
+    - analysis/SolarProxy_Cal.qmd               # -> data/processed/SolarProxy.csv
+    - analysis/EDA.qmd
+    - analysis/WindCF_Analysis.qmd
+    - analysis/SolarCF_Analysis.qmd
+    - analysis/CF_Forecast_FY27-29.qmd          # -> data/forecast/FY27-29_<Model>.csv
+    - report.qmd
+    - presentation.qmd
+
+jupyter: python3

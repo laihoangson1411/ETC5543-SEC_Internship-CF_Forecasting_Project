@@ -1,0 +1,19 @@
+# Render options shared by every notebook in analysis/ (each .qmd only sets its own title).
+# The project itself (render order, Jupyter kernel) is defined in ../_quarto.yml.
+execute:
+  warning: false
+format:
+  html:
+    toc: true
+    code-fold: true          # code is collapsed under a "Code" toggle
+    code-overflow: wrap
+    embed-resources: true
+    grid:
+      body-width: 1100px     # wider text column so the large figures stay readable
+      margin-width: 250px
+    include-in-header:
+      text: |
+        <style>
+        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
+        .cell-output-display img { max-width: 100%; height: auto; }
+        </style>

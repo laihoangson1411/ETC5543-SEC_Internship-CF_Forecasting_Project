@@ -1,0 +1,19 @@
+# Python packages for the analysis notebooks (Python 3.13, rendered with Quarto 1.8).
+# Install with:  python -m pip install -r requirements.txt
+# The versions are pinned: the model results (especially XGBoost) change between library versions.
+# macOS only: XGBoost also needs OpenMP:  brew install libomp
+
+# Data and models
+numpy==2.4.6
+pandas==3.0.6
+scipy==1.17.1
+scikit-learn==1.9.1
+statsmodels==0.15.0
+xgboost==3.2.0
+
+# Plots
+matplotlib==3.10.9
+
+# Jupyter kernel used by `quarto render`
+jupyter==1.1.1
+ipykernel==7.4.0

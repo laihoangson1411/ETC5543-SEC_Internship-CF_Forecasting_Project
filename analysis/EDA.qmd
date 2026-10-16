@@ -1,23 +1,5 @@
 ---
 title: "Exploratory data analysis and LGC"
-jupyter: python3
-execute:
-  warning: false
-format:
-  html:
-    toc: true
-    code-fold: true          # code is collapsed under a "Code" toggle
-    code-overflow: wrap
-    embed-resources: true
-    grid:
-      body-width: 1100px   # wider text column so the large figures stay readable
-      margin-width: 250px
-    include-in-header:
-      text: |
-        <style>
-        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
-        .cell-output-display img { max-width: 100%; height: auto; }
-        </style>
 ---
 
 **Goal.** Look at the data before modelling: how contract factor (CF) moves with price and weather, what a price-only baseline can do, and how the LGC (certificate) price links to negative prices.
@@ -34,18 +16,17 @@ format:
 
 4. LGC price: series, negative-price severity, link to negative-price depth, shrink factor
 
-**Inputs.** `data/raw/` (generation, weather, exclusion periods, LGC), `data/processed/` (quantile-mapped wind speed from `Wind_QuantileMapping.qmd`, solar proxy from `SolarProxy_Cal.qmd`) and `data/forecast/` (forward price curve). Nothing is saved: this file is for looking, not for producing data.
+**Inputs.** `data/raw/` (generation, weather, exclusion periods, LGC, 30-min price forecast) and `data/processed/` (quantile-mapped wind speed from `Wind_QuantileMapping.qmd`, solar proxy from `SolarProxy_Cal.qmd`). Nothing is saved: this file is for looking, not for producing data.
 
 ## 1. Set-up
 
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, sets the data folder, defines `cfg`
-# (analysis window, train/test years, assets, weather stations, model settings) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
 #  - generation (MLF- and capacity-scaled) and half-hourly weather come from utilsData
 #    (wind speed uses the quantile-mapped file written by Wind_QuantileMapping.qmd)
-#  - T_forward: monthly TWAP of the VIC forward price curve (the forecast TWAP)
+#  - T_forecast: monthly TWAP of the VIC 30-min price forecast (the forecast TWAP)
 #  - lgc_m: monthly LGC price (month-start index)
 # =============================================================================
 
@@ -55,8 +36,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from matplotlib.transforms import ScaledTranslation
-from IPython.display import display, Markdown
+from IPython.display import display
 
 warnings.filterwarnings('ignore')
 
@@ -66,208 +46,75 @@ ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
             if os.path.isdir(os.path.join(p, 'functions')))
 sys.path.append(os.path.join(ROOT, 'functions'))
 
-from utilsContractFactors import getFY, getSeason, expfunctionCF, aggregateContractFactorsByGenType
-from utilsData import (load_generation_inputs, load_weather_history, build_targets,
-                       month_end_labels, _to_naive_timestamp, _reindex_and_interpolate)
-from utilsScenario import load_forward_twap_monthly, shrink_factor, monthly_depth, build_scenario_features
-from utilsModels import fit_exponential, calculate_metrics
+from config import DATA_DIR, make_cfg
+from utilsPlot import (PURPLE, ORANGE, SEASON_STYLE, CORR_CMAP, set_style, add_titles, table_title,
+                       fy_separators, annotated_heatmap)
+from utilsContractFactors import getFY, expfunctionCF
+from utilsData import (load_generation_inputs, load_weather_history, add_calendar_features,
+                       monthly_station_mean, build_twap_split_monthly, month_start)
+from utilsScenario import load_forecast_twap_monthly, load_lgc_monthly, fit_depth_model, shrink_factor
+from utilsModels import fit_exponential, calculate_metrics, predict_exponential
 
-DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/, processed/ and forecast/
-
-cfg = {
-    'random_seed': 42,
-    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
-
-    # Train/test split by financial year (FY ends in June)
-    'train_fys': [2023, 2024, 2025],
-    'test_fys': [2026],
-    'analysis_start': '2022-07-01 00:00:00',
-    'analysis_end': '2026-06-30 23:30:00',
-
-    # Assets and weather stations
-    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
-    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
-    'station_ids': [85280, 86338, 89002],         # stations read from the weather files
-    'wind_stations': [86338, 89002],              # DTN stations averaged into the monthly wind features
-    'solar_stations': [85280, 86338, 89002],      # Solcast stations averaged into the monthly solar features
-    'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
-
-    # Input files
-    'lgc_csv': os.path.join(DATA_DIR, 'raw', 'HistoricLGCPrice.csv'),                          # monthly LGC prices
-    'forward_curve_csv': os.path.join(DATA_DIR, 'raw', 'PriceForecast_30min.csv'),  # 30-min forward prices
-
-    # Model settings
-    'rf_params': {'n_estimators': 300, 'max_depth': 4, 'min_samples_leaf': 2, 'random_state': 42},
-    'xgb_params': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.05, 'subsample': 0.9,
-                   'colsample_bytree': 0.9, 'reg_lambda': 1.0, 'random_state': 42},
-    'alpha_grid': np.logspace(0, 2, 15),          # candidate alphas for RidgeCV
-}
+cfg = make_cfg()
 np.random.seed(cfg['random_seed'])
+set_style(small_fonts=True, **{'axes.grid': False})      # this file draws without grid lines
 
-gen_scaled, vret_data, capacity = load_generation_inputs(cfg, DATA_DIR)
+gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
 weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=True)    # wind speed: quantile-mapped
 price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
 
-# Forward price curve -> monthly TWAP (the forecast T)
-T_forward = load_forward_twap_monthly(cfg['forward_curve_csv'])
-print(f'Forward curve: {len(T_forward)} months, {T_forward.index.min():%Y-%m} to {T_forward.index.max():%Y-%m}')
+# Price forecast -> monthly TWAP (the forecast T)
+T_forecast = load_forecast_twap_monthly(cfg['price_forecast_csv'])
+print(f'Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}')
 
-# Monthly LGC price (certificate prices); utf-8-sig strips the BOM that Excel adds to CSV files
-lgc_prices = pd.read_csv(cfg['lgc_csv'], index_col=0, parse_dates=True, dayfirst=True, encoding='utf-8-sig')
-lgc_m = lgc_prices['LGC'].resample('MS').mean().rename('lgc')         # snap to month-start
-print(f'LGC prices: {len(lgc_prices)} rows, {lgc_prices.index.min():%Y-%m} to {lgc_prices.index.max():%Y-%m}')
+lgc_m = load_lgc_monthly(cfg['lgc_csv'])                              # monthly LGC price, month-start index
+print(f'LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}')
 
 print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
 ```
 
 ```{python}
 # =============================================================================
-# CELL 1.2 -- Monthly feature table df_wind
-# One row per month with: target (WIND fleet CF), the plain monthly twap, the split price features
-# twap_neg / twap_pos, neg_share (share of negative half-hours, needed to rescale the split to a target TWAP),
-# month_sin/cos, FY, Season, the driver weather (wind_speed_kph, temp_c, rh) and CF_lag12 (Seasonal Naive).
-#  monthly_target  monthly CF and TWAP per asset and for the WIND fleet (utilsData.build_targets)
-#  twap_neg / twap_pos  monthly mean of the negative / non-negative half-hourly prices
+# CELL 1.2 -- Monthly feature tables df_wind and df_solar
+# One row per month with: target (WIND or SOLAR portfolio CF), the plain monthly twap, the split price features
+# twap_neg / twap_pos, neg_share (share of negative half-hours), month_sin/cos, FY, Season, the weather of the
+# portfolio's stations and CF_lag12 (Seasonal Naive).
+#  monthly_target  monthly CF and TWAP of every asset and portfolio (HistoricContractFactors.csv) + calendar features
+#  wind weather    wind_speed_kph, temp_c, rh, dp_c, rainfall_mm (mean of the wind stations)
+#  solar weather   ghi, dni, air_temp_c (mean of the solar stations); solar_proxy and solar_share from SolarProxy.csv
+#  Empty negative / positive bucket: NaN for wind, 0 for solar (as in the wind and solar analysis files)
 # =============================================================================
 
-monthly_target = build_targets(gen_scaled, cfg, capacity)
-monthly_target = aggregateContractFactorsByGenType(monthly_target, cfg['solar_assets'], 'SOLAR')   # add the SOLAR fleet
-
-def monthly_station_mean(weather_hh: pd.DataFrame, metric: str, stations: list) -> pd.Series:
-    """Monthly mean of one metric: average the given stations per half-hour, then average each month."""
-    cols = [f'{metric}_{s}' for s in stations if f'{metric}_{s}' in weather_hh.columns]
-    labels = month_end_labels(weather_hh.index)           # month-end label of every half-hour
-    return weather_hh[cols].mean(axis=1).groupby(labels).mean()
+monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
+monthly_target = add_calendar_features(monthly_target)                          # month_sin/cos, FY, Season
+proxy_features = pd.read_csv(os.path.join(DATA_DIR, 'processed', 'SolarProxy.csv'), index_col=0, parse_dates=True)
 
 
-def build_twap_split_monthly(price: pd.Series, fill_empty: bool = False) -> pd.DataFrame:
-    """Monthly mean of the negative and of the non-negative half-hourly prices.
-
-    twap_neg: mean of half-hours with price < 0.  twap_pos: mean of half-hours with price >= 0.
-    neg_share: share of half-hours with price < 0.
-    fill_empty: False (wind) leaves NaN in a month with an empty bucket; True (solar) sets it to 0.
-    """
-    labels = month_end_labels(price.index)
-    out = pd.DataFrame({
-        'twap_neg': price.where(price < 0).groupby(labels).mean(),
-        'twap_pos': price.where(price >= 0).groupby(labels).mean(),
-        'neg_share': (price < 0).groupby(labels).mean(),
-    })
-    if fill_empty:
-        out[['twap_neg', 'twap_pos']] = out[['twap_neg', 'twap_pos']].fillna(0)
-    out.index.name = 'Time-ending'
-    return out
-
-
-def build_feature_table(target: pd.Series, split: pd.DataFrame) -> pd.DataFrame:
-    """Columns shared by the wind and solar tables: target, twap, price split and calendar features."""
+def build_feature_table(portfolio, fill_empty, stations, weather_cols):
+    """Monthly table of one portfolio ('WIND' or 'SOLAR'): target, price features, calendar and weather."""
     d = pd.DataFrame(index=monthly_target.index)
-    d['target'] = target
+    d['target'] = monthly_target[f'{portfolio}_ContractFactor']
     d['twap'] = monthly_target['VIC1Price_TWAP']
-    d['twap_neg'] = split['twap_neg'].reindex(d.index)
-    d['twap_pos'] = split['twap_pos'].reindex(d.index)
-    d['neg_share'] = split['neg_share'].reindex(d.index)
-    d['month_sin'] = monthly_target['month_sin']
-    d['month_cos'] = monthly_target['month_cos']
-    d['FY'] = monthly_target['FY']
-    d['Season'] = monthly_target['Season']
+    d[['twap_neg', 'twap_pos', 'neg_share']] = build_twap_split_monthly(price_hh, fill_empty).reindex(d.index)
+    for col in ['month_sin', 'month_cos', 'FY', 'Season']:
+        d[col] = monthly_target[col]
+    for col in weather_cols:
+        d[col] = monthly_station_mean(weather_hh, col, stations).reindex(d.index)
+    d['CF_lag12'] = d['target'].shift(12)                     # same month one year earlier (Seasonal Naive)
     return d
 
 
-WIND_WEATHER_COLS = ['wind_speed_kph', 'temp_c', 'rh']      # weather features of the wind models
-ws = cfg['wind_stations']
-
-df_wind = build_feature_table(monthly_target['WIND_ContractFactor'], build_twap_split_monthly(price_hh))
-df_wind['wind_speed_kph'] = monthly_station_mean(weather_hh, 'wind_speed_kph', ws).reindex(df_wind.index)
-df_wind['temp_c'] = monthly_station_mean(weather_hh, 'temp_c', ws).reindex(df_wind.index)
-df_wind['rh'] = monthly_station_mean(weather_hh, 'rh', ws).reindex(df_wind.index)
-df_wind['CF_lag12'] = df_wind['target'].shift(12)           # same month one year earlier (Seasonal Naive)
-
+df_wind = build_feature_table('WIND', False, cfg['wind_stations'], ['wind_speed_kph', 'temp_c', 'rh', 'dp_c', 'rainfall_mm'])
+df_solar = build_feature_table('SOLAR', True, cfg['solar_stations'], ['ghi', 'dni', 'air_temp_c'])
+df_solar['solar_proxy'] = proxy_features['proxy_solar'].reindex(df_solar.index)
+df_solar['solar_share'] = proxy_features['solar_share'].reindex(df_solar.index)
 
 TRAIN_FYS = cfg['train_fys']
 TEST_FYS = cfg['test_fys']
-TEST_MONTHS = df_wind.index[df_wind['FY'].isin(TEST_FYS)]
 
-print(f"WIND: {len(df_wind)} monthly rows, train = {df_wind['FY'].isin(TRAIN_FYS).sum()}, "
-      f"test = {df_wind['FY'].isin(TEST_FYS).sum()}")
+for name, d in [('WIND', df_wind), ('SOLAR', df_solar)]:
+    print(f"{name}: {len(d)} monthly rows, train = {d['FY'].isin(TRAIN_FYS).sum()}, test = {d['FY'].isin(TEST_FYS).sum()}")
 display(df_wind.tail(3).round(3))
-```
-
-```{python}
-# =============================================================================
-# CELL 1.3 -- Plot helpers
-# add_titles   bold title with an italic insight line below it (call after tight_layout)
-# table_title  bold caption above a displayed table
-# =============================================================================
-
-plt.rcParams.update({'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
-                     'axes.spines.top': False, 'axes.spines.right': False,
-                     'font.size': 9, 'axes.titlesize': 9.5, 'xtick.labelsize': 8,
-                     'ytick.labelsize': 8, 'legend.fontsize': 8})
-
-
-def add_titles(fig, title, subtitle=None):
-    """Bold figure title with an optional one-line insight (subtitle) below it.
-
-    Call after fig.tight_layout(); the text is placed just above the top of the figure.
-    """
-    def put(text, offset_pt, **kw):
-        # figure-fraction x, y = top edge of the figure, then shifted up by offset_pt points
-        shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
-        fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
-    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
-    if subtitle:
-        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
-
-
-def table_title(title, note=None):
-    """Print a bold table caption (and an optional italic note) above display(df)."""
-    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
-
-plt.rcParams.update({'figure.dpi': 110, 'axes.grid': False,
-                     'axes.spines.top': False, 'axes.spines.right': False,
-                     'font.size': 9, 'axes.titlesize': 9.5, 'xtick.labelsize': 8,
-                     'ytick.labelsize': 8, 'legend.fontsize': 8})
-```
-
-```{python}
-# =============================================================================
-# CELL 1.4 -- Monthly solar table df_solar and extra wind weather
-# df_solar   target (SOLAR fleet CF), twap and price split, ghi / dni / air_temp_c, solar_proxy and solar_share
-#            (solar_proxy and solar_share are read from data/processed/SolarProxy.csv)
-# dp_c, rainfall_mm  optional extra DTN columns for the wind heatmap; added only if they are in the raw file
-# =============================================================================
-
-# --- SOLAR ---
-SOLAR_WEATHER_COLS = ['ghi', 'dni', 'air_temp_c']
-solar_stn = cfg['solar_stations']
-
-proxy_features = pd.read_csv(os.path.join(DATA_DIR, 'processed', 'SolarProxy.csv'), index_col=0, parse_dates=True)
-
-df_solar = build_feature_table(monthly_target['SOLAR_ContractFactor'], build_twap_split_monthly(price_hh, fill_empty=True))
-for c in SOLAR_WEATHER_COLS:
-    df_solar[c] = monthly_station_mean(weather_hh, c, solar_stn).reindex(df_solar.index)
-df_solar['solar_proxy'] = proxy_features['proxy_solar'].reindex(df_solar.index)
-df_solar['solar_share'] = proxy_features['solar_share'].reindex(df_solar.index)
-df_solar['CF_lag12'] = df_solar['target'].shift(12)
-
-
-# --- Optional extra wind weather (dew point, rainfall) ---
-wind_csv = os.path.join(DATA_DIR, 'raw', 'HistoricWeather_30min.csv')
-extra_cols = [c for c in ['dp_c', 'rainfall_mm'] if c in pd.read_csv(wind_csv, nrows=0).columns]
-if extra_cols:
-    raw = pd.read_csv(wind_csv, usecols=['related_location', 'obs_time_local'] + extra_cols)
-    raw['ts_local'] = _to_naive_timestamp(raw['obs_time_local'])
-    raw = raw[raw['related_location'].isin(ws) & raw['ts_local'].between(cfg['analysis_start'], cfg['analysis_end'])]
-    wide = raw.pivot_table(index='ts_local', columns='related_location', values=extra_cols, aggfunc='last')
-    wide.columns = [f'{metric}_{stn}' for metric, stn in wide.columns]
-    wide = _reindex_and_interpolate(wide, cfg['analysis_start'], cfg['analysis_end'], cfg['weather_interp_limit'])
-    for c in extra_cols:
-        df_wind[c] = monthly_station_mean(wide, c, ws).reindex(df_wind.index)
-print('Extra wind weather columns:', extra_cols if extra_cols else 'none in the raw file (skipped)')
-
-print(f"SOLAR: {len(df_solar)} monthly rows, train = {df_solar['FY'].isin(TRAIN_FYS).sum()}, "
-      f"test = {df_solar['FY'].isin(TEST_FYS).sum()}")
 display(df_solar.tail(3).round(3))
 ```
 
@@ -284,13 +131,11 @@ display(df_solar.tail(3).round(3))
 
 fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True, sharey=True)
 
-for ax, tech, color, d in [(axes[0], 'WIND', '#391B56', df_wind), (axes[1], 'SOLAR', '#e67e22', df_solar)]:
+for ax, tech, color, d in [(axes[0], 'WIND', PURPLE, df_wind), (axes[1], 'SOLAR', ORANGE, df_solar)]:
     cf = d['target']
-    x = cf.index.to_period('M').to_timestamp()                       # month-end -> month-start, so July 2022 sits on July
-    ax.plot(x, cf.values, 'o-', color=color, ms=4, lw=1.4, label=f'{tech} CF')
+    ax.plot(month_start(cf.index), cf.values, 'o-', color=color, ms=4, lw=1.4, label=f'{tech} CF')   # July 2022 sits on July
     ax.axhline(1.0, color='0.7', lw=0.8, ls='--', zorder=0)
-    for y in range(TRAIN_FYS[0] + 1, TEST_FYS[-1] + 1):             # FY dividers
-        ax.axvline(pd.Timestamp(f'{y - 1}-07-01'), color='0.8', lw=0.7, ls=':')
+    fy_separators(ax, TRAIN_FYS[0] + 1, TEST_FYS[-1])
     ax.set_title(tech, loc='center', fontsize=11)
     ax.set_ylim(0, 1.7)
 
@@ -309,10 +154,8 @@ The correlations use the **training years only**, so the test year does not infl
 # =============================================================================
 # CELL 2.2 -- Correlation heatmaps (WIND and SOLAR)
 # Annotated, square correlation matrices of the monthly features (training FYs only).
-# The target is shown as WIND_CF / SOLAR_CF. Columns that are not in the table (e.g. dp_c, rainfall_mm
-# when the raw weather file does not have them) are skipped.
+# The target is shown as WIND_CF / SOLAR_CF.
 # =============================================================================
-from matplotlib.colors import LinearSegmentedColormap
 
 HEATMAP_COLS = {
     'WIND': ['WIND_CF', 'twap', 'twap_pos', 'twap_neg', 'wind_speed_kph', 'temp_c', 'rh',
@@ -321,9 +164,7 @@ HEATMAP_COLS = {
               'solar_proxy', 'solar_share', 'month_sin', 'month_cos'],
 }
 
-# Colours: purple = negative, orange = positive
-NEG_COLOR, POS_COLOR = '#391b56', '#e67e22'
-CORR_CMAP = LinearSegmentedColormap.from_list('purple_orange', [NEG_COLOR, '#ffffff', POS_COLOR])
+# Colours: CORR_CMAP from utilsPlot (orange = negative, purple = positive), as in IDA_Weather_SolarIrradiance.qmd
 
 
 def correlation_matrix(df: pd.DataFrame, cols: list, target_name: str, train_only: bool = True,
@@ -358,18 +199,7 @@ def plot_corr_heatmap(corr: pd.DataFrame, cmap=CORR_CMAP, side: float = 6.0):
     fig = plt.figure(figsize=(fig_w, fig_h))
 
     ax = fig.add_axes([left / fig_w, bottom / fig_h, side / fig_w, side / fig_h])
-    im = ax.imshow(corr.values, cmap=cmap, vmin=-1, vmax=1)
-    ax.grid(False)
-    ax.set_xticks(range(len(corr.columns)))
-    ax.set_xticklabels(corr.columns, rotation=45, ha='right')
-    ax.set_yticks(range(len(corr.index)))
-    ax.set_yticklabels(corr.index)
-    # Write the correlation in every cell (white text on dark cells)
-    for i in range(corr.shape[0]):
-        for j in range(corr.shape[1]):
-            v = corr.values[i, j]
-            ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=8,
-                    color='white' if abs(v) > 0.6 else 'black')
+    im = annotated_heatmap(ax, corr, cmap, -1, 1, fontsize=8, rotate_x=True)
 
     # Colour bar to the right of the heatmap
     cax = fig.add_axes([(left + side + 0.4) / fig_w, bottom / fig_h, 0.25 / fig_w, side / fig_h])
@@ -393,7 +223,7 @@ for name, corr, t in [('WIND', corr_wind, 'WIND_CF'), ('SOLAR', corr_solar, 'SOL
 **Idea.** CF depends mostly on the monthly price (TWAP). For each season one curve $CF = f(\text{TWAP})$ is fitted on the training years (`expfunctionCF`), then used to predict the test year. Two versions of the test-year prediction:
 
 - **actual TWAP**: the real TWAP of each test month (best case, for reference)
-- **forward TWAP**: the forward-curve price `T_forward` (the real forecast)
+- **forecast TWAP**: the monthly mean of the 30-min price forecast `T_forecast` (the real forecast)
 
 Months with CF <= 0, CF >= 3 or TWAP <= 0 are left out of the fit.
 
@@ -401,20 +231,8 @@ Months with CF <= 0, CF >= 3 or TWAP <= 0 are left out of the fit.
 # =============================================================================
 # CELL 3.1 -- Exponential baseline (WIND and SOLAR)
 # Fit one curve per season on the training years (utilsModels.fit_exponential), predict the test year at the
-# actual TWAP and at the forward TWAP, and score both against the actual CF (MAE, RMSE, MAPE, R2).
+# actual TWAP and at the forecast TWAP, and score both against the actual CF (MAE, RMSE, MAPE, R2).
 # =============================================================================
-from utilsModels import fit_exponential, calculate_metrics
-
-
-def predict_exponential(params: dict, seasons: pd.Series, twap: pd.Series) -> pd.Series:
-    """Predict CF for each month: use the curve of the month's season, evaluated at the month's TWAP."""
-    out = pd.Series(np.nan, index=twap.index)
-    for season, p in params.items():
-        mask = (seasons == season) & twap.notna()
-        if mask.any() and not np.isnan(p['a']):
-            out[mask] = expfunctionCF(twap[mask].values, p['a'], p['b'])
-    return out
-
 
 tables = {'WIND': df_wind, 'SOLAR': df_solar}
 exp_params, exp_pred, metric_rows, param_rows = {}, {}, [], []
@@ -429,20 +247,20 @@ for tech, d in tables.items():
     test = d[d['FY'].isin(TEST_FYS)]
     pred = pd.DataFrame({'actual_CF': test['target']})
     pred['exp_actualT'] = predict_exponential(exp_params[tech], test['Season'], test['twap'])
-    pred['exp_forwardT'] = predict_exponential(exp_params[tech], test['Season'], T_forward.reindex(test.index))
+    pred['exp_forecastT'] = predict_exponential(exp_params[tech], test['Season'], T_forecast.reindex(test.index))
     exp_pred[tech] = pred
 
     for season, p in exp_params[tech].items():
         param_rows.append({'tech': tech, 'season': season, 'a': p['a'], 'b': p['b'],
                            'n_train': int(n_train.get(season, 0))})
-    for label, col in [('actual TWAP', 'exp_actualT'), ('forward TWAP', 'exp_forwardT')]:
+    for label, col in [('actual TWAP', 'exp_actualT'), ('forecast TWAP', 'exp_forecastT')]:
         metric_rows.append({'tech': tech, 'TWAP used': label, **calculate_metrics(pred['actual_CF'], pred[col])})
 
-table_title('Table 4.1 - fitted curves (one per season)')
+table_title('Table 3.1 - fitted curves (one per season)')
 display(pd.DataFrame(param_rows).round(4))
 
 exp_metrics = pd.DataFrame(metric_rows)
-table_title('Table 4.2 - test-year error of the Exponential baseline vs the actual CF')
+table_title('Table 3.2 - test-year error of the Exponential baseline vs the actual CF')
 display(exp_metrics.round(4))
 
 # Actual vs predicted CF over the test year
@@ -451,14 +269,14 @@ for ax, tech in zip(axes, tables):
     pred = exp_pred[tech]
     ax.plot(pred.index, pred['actual_CF'], 'k-o', label='Actual CF')
     ax.plot(pred.index, pred['exp_actualT'], '--s', color='tab:blue', label='Exponential (actual TWAP)')
-    ax.plot(pred.index, pred['exp_forwardT'], '--^', color='tab:orange', label='Exponential (forward TWAP)')
+    ax.plot(pred.index, pred['exp_forecastT'], '--^', color='tab:orange', label='Exponential (forecast TWAP)')
     ax.set_title(f'{tech}: test year')
     ax.set_ylabel('Contract factor')
     ax.legend(fontsize=8)
 fig.tight_layout()
 mae = exp_metrics.set_index(['tech', 'TWAP used'])['MAE']
 add_titles(fig, 'Exponential baseline: predicted vs actual CF in the test year',
-           f"MAE at the forward TWAP: wind {mae[('WIND', 'forward TWAP')]:.3f}, solar {mae[('SOLAR', 'forward TWAP')]:.3f}")
+           f"MAE at the forecast TWAP: wind {mae[('WIND', 'forecast TWAP')]:.3f}, solar {mae[('SOLAR', 'forecast TWAP')]:.3f}")
 plt.show()
 ```
 
@@ -471,8 +289,6 @@ plt.show()
 # =============================================================================
 from matplotlib.lines import Line2D
 
-SEASONS = {1: ('Summer', '#C44E52', 'o'), 2: ('Autumn', '#DD8452', 's'),
-           3: ('Winter', '#4C72B0', 'D'), 4: ('Spring', '#55A868', '^')}
 
 twap = monthly_target['VIC1Price_TWAP']
 season = monthly_target['Season']
@@ -486,7 +302,7 @@ total_mae = {}
 for ax, tech in zip(axes, ['WIND', 'SOLAR']):
     cf = tables[tech]['target']
     mae_txt, errs = [], []
-    for s, (name, c, mk) in SEASONS.items():
+    for s, (name, c, mk) in SEASON_STYLE.items():
         p = exp_params[tech].get(s)
         tr = is_train & (season == s)
         te = is_test & (season == s) & cf.notna()
@@ -516,7 +332,7 @@ axes[-1].set_xlabel('TWAP ($/MWh)')
 fig.supylabel('Contract Factor', fontsize=9)
 
 handles = [Line2D([], [], ls='', marker=mk, mfc=c, mec='black', mew=0.5, ms=5, label=name)
-           for name, c, mk in SEASONS.values()]
+           for name, c, mk in SEASON_STYLE.values()]
 handles += [Line2D([], [], ls='', marker='o', mfc='0.5', mec='none', alpha=0.4, ms=4, label='Train'),
             Line2D([], [], ls='', marker='o', mfc='0.5', mec='black', mew=0.5, ms=5, label='Test (no. = month)'),
             Line2D([], [], color='0.5', lw=1, label='Exponential fit')]
@@ -548,9 +364,9 @@ lgc_plot = lgc_m.loc[cfg['analysis_start'][:7]:cfg['analysis_end'][:7]]
 twap_neg_monthly = df_wind['twap_neg'].dropna()
 
 fig, ax = plt.subplots(figsize=(8, 5))
-ax.plot(lgc_plot.index, lgc_plot, color='#391B56', lw=1.4, label='LGC price')
-ax.plot(lgc_plot.index, -lgc_plot, color='#391B56', ls='--', lw=1, alpha=0.5, label='-LGC (mirror)')
-ax.plot(twap_neg_monthly.index, twap_neg_monthly, color='#e67e22', lw=1.4, label='Negative TWAP')
+ax.plot(lgc_plot.index, lgc_plot, color=PURPLE, lw=1.4, label='LGC price')
+ax.plot(lgc_plot.index, -lgc_plot, color=PURPLE, ls='--', lw=1, alpha=0.5, label='-LGC (mirror)')
+ax.plot(twap_neg_monthly.index, twap_neg_monthly, color=ORANGE, lw=1.4, label='Negative TWAP')
 ax.axhline(0, color='0.6', lw=0.8, zorder=0)
 ax.set_ylabel('$/MWh')
 ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False)
@@ -578,10 +394,10 @@ pivot_cnt = (pd.crosstab(bkt, 'FY' + fy.astype(str))
 total_hh = ('FY' + fy.astype(str)).value_counts().reindex(fy_cols)
 pivot_pct = pivot_cnt / total_hh * 100
 
-table_title('Table 5.1 - share of all half-hours by negative-price bucket (%)')
+table_title('Table 4.1 - share of all half-hours by negative-price bucket (%)')
 display(pivot_pct.round(2))
 
-colors_bkt = mpl.colors.LinearSegmentedColormap.from_list('purple', ['#cbbbe0', '#391B56'])(np.linspace(0, 1, 4))
+colors_bkt = mpl.colors.LinearSegmentedColormap.from_list('purple', ['#cbbbe0', PURPLE])(np.linspace(0, 1, 4))
 
 fig, ax = plt.subplots(figsize=(8, 5))
 pivot_pct.T.plot(kind='bar', stacked=True, ax=ax, color=colors_bkt, width=0.6, legend=False)
@@ -591,7 +407,6 @@ handles, labels = ax.get_legend_handles_labels()
 ax.legend(handles, [l.replace('$', '\\$') for l in labels],     # escape $ (matplotlib maths text)
           loc='lower center', bbox_to_anchor=(0.5, -0.22), ncol=4, frameon=False)
 fig.tight_layout()
-neg_total = pivot_pct.sum()
 add_titles(fig, 'Share of negative-price half-hours by severity and FY')
 plt.show()
 ```
@@ -607,7 +422,7 @@ where `a` is the non-LGC floor (thermal minimum generation, PPA bidding) and `b`
 ```{python}
 # =============================================================================
 # CELL 4.3 -- Validate the LGC link
-# Fits depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist.
+# Fits depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist (utilsScenario.fit_depth_model).
 # `a_lgc` and `b_lgc` feed the shrink factor in the forecast files.
 #  MODE      'empirical' (recommended, keeps the non-LGC floor a) or 'lgc_ratio' (all depth is LGC-driven)
 #  DEPTH_Q   quantile used as the negative-price depth measure
@@ -619,29 +434,7 @@ DEPTH_Q = 0.05
 MIN_R = 0.5
 
 
-def fit_depth_model(price: pd.Series, lgc: pd.Series, how=DEPTH_Q) -> dict:
-    """Fit depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist.
-
-    Returns:
-        dict with a, b, r_raw, r_within (mean within-season correlation), months and the
-        data frame `data` (depth, lgc, sin, cos, season) used for the fit.
-    """
-    d = pd.concat([monthly_depth(price, how), lgc], axis=1).dropna()
-    d = d[d.index <= price.index.max()]
-
-    month_num = d.index.month
-    d['sin'] = np.sin(2 * np.pi * month_num / 12)
-    d['cos'] = np.cos(2 * np.pi * month_num / 12)
-    d['season'] = month_num % 12 // 3                         # 0=DJF, 1=MAM, 2=JJA, 3=SON
-
-    X = np.column_stack([np.ones(len(d)), d['lgc'], d['sin'], d['cos']])
-    coef, *_ = np.linalg.lstsq(X, d['depth'].values, rcond=None)
-    r_within = np.nanmean([g['depth'].corr(g['lgc']) for _, g in d.groupby('season')])
-    return {'a': coef[0], 'b': coef[1], 'r_raw': d['depth'].corr(d['lgc']),
-            'r_within': r_within, 'months': len(d), 'data': d}
-
-
-depth_fit = fit_depth_model(price_hh, lgc_m)
+depth_fit = fit_depth_model(price_hh, lgc_m, DEPTH_Q)       # utilsScenario; also returns r_raw, r_within, data
 a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
 d_lgc = depth_fit['data']
 
@@ -700,6 +493,6 @@ for m_h in [pd.Timestamp(f'{y}-07-01') for y in range(TRAIN_FYS[0] - 1, TEST_FYS
             rows.append({'historical month': f'{m_h:%b %Y}', 'LGC hist': lgc_m[m_h],
                          'reused for': f'{m_f:%b %Y}', 'LGC future': lgc_m[m_f],
                          'shrink factor': shrink_factor(m_h, m_f, lgc_m, MODE, (a_lgc, b_lgc))})
-table_title('Table 5.2 - shrink factor of historical negative prices', f'mode = {MODE}; 1.0 = no change')
+table_title('Table 4.2 - shrink factor of historical negative prices', f'mode = {MODE}; 1.0 = no change')
 display(pd.DataFrame(rows).round(3))
 ```

@@ -1,23 +1,5 @@
 ---
 title: "Initial data analysis: weather and solar irradiance"
-jupyter: python3
-execute:
-  warning: false
-format:
-  html:
-    toc: true
-    code-fold: true          # code is collapsed under a "Code" toggle
-    code-overflow: wrap
-    embed-resources: true
-    grid:
-      body-width: 1100px   # wider text column so the large figures stay readable
-      margin-width: 250px
-    include-in-header:
-      text: |
-        <style>
-        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
-        .cell-output-display img { max-width: 100%; height: auto; }
-        </style>
 ---
 
 **Goal.** Before any weather variable is used, check that the two weather sources can be trusted and decide which **stations** and which **variables** go into the next steps (`Wind_QuantileMapping.qmd`, `SolarProxy_Cal.qmd`, `EDA.qmd` and the models).
@@ -51,9 +33,8 @@ import os, sys, warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.transforms import ScaledTranslation
 from matplotlib.colors import LinearSegmentedColormap
-from IPython.display import display, Markdown
+from IPython.display import display
 
 warnings.filterwarnings('ignore')
 
@@ -63,21 +44,13 @@ ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
             if os.path.isdir(os.path.join(p, 'functions')))
 sys.path.append(os.path.join(ROOT, 'functions'))
 
-from utilsData import load_generation_inputs, _to_naive_timestamp
+from config import DATA_DIR, make_cfg
+from utilsPlot import GREY, PURPLE, ORANGE, CORR_CMAP, set_style, add_titles, table_title, annotated_heatmap
+from utilsData import load_generation_inputs, to_naive_timestamp
 
-DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
-
-cfg = {
-    'analysis_start': '2022-07-01 00:00:00',
-    'analysis_end': '2026-06-30 23:30:00',
-    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
-    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
-    'station_ids': [85280, 86338, 89002],
-    'wind_stations': [86338, 89002],                     # chosen in section 2: DTN stations averaged for wind
-    'solar_stations': [85280, 86338, 89002],             # chosen in section 2: Solcast stations averaged for solar
-    'corruption_window': ('2025-10-07', '2026-04-14'),   # DTN wind speed is squashed here (found in Wind_QuantileMapping.qmd)
-    'weather_interp_limit': 2,                           # the models' loader interpolates gaps of up to 2 half-hours
-}
+# wind_stations / solar_stations are the stations chosen in section 2 (set in config.py);
+# corruption_window is the squashed DTN wind speed found in Wind_QuantileMapping.qmd
+cfg = make_cfg()
 STATIONS = cfg['station_ids']
 all_assets = cfg['wind_assets'] + cfg['solar_assets']
 START, END = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
@@ -94,7 +67,7 @@ def load_raw_station_file(path, station_col, time_col):
         variables: list of the numeric variables found in the file.
     """
     raw = pd.read_csv(path).rename(columns={station_col: 'station', time_col: 'ts'})
-    raw['ts'] = _to_naive_timestamp(raw['ts'])
+    raw['ts'] = to_naive_timestamp(raw['ts'])
     raw['station'] = pd.to_numeric(raw['station'], errors='coerce')
     others = [c for c in raw.columns if c not in ('station', 'ts')]
     numeric = raw[others].apply(pd.to_numeric, errors='coerce')                 # text becomes NaN
@@ -134,51 +107,15 @@ print(f'Weather columns: {wx.shape[1]} ({len(DTN_VARS)} DTN + {len(SOL_VARS)} So
 
 ```{python}
 # =============================================================================
-# CELL 1.2 -- Plot style and table helpers
-#   add_titles, table_title  figure title + insight subtitle, table caption
-# Colours: purple and orange, as in the other files.
+# CELL 1.2 -- Plot style (annotated heatmaps use utilsPlot.annotated_heatmap)
+# Colours: purple and orange (utilsPlot), as in the other files. Correlations use CORR_CMAP (-1 orange, +1 purple).
 # =============================================================================
 
-GREY = '#888888'
-PURPLE, ORANGE = '#391B56', '#E67E22'
 HEAT = LinearSegmentedColormap.from_list('purple', ['#F3EEF8', PURPLE])             # 0 (light) -> 1 (purple)
-DIVERGING = LinearSegmentedColormap.from_list('orange_purple', [ORANGE, 'white', PURPLE])   # -1 -> +1
 MISSING = LinearSegmentedColormap.from_list('missing', ['white', ORANGE])           # 0% (white) -> more missing (orange)
 
-plt.rcParams.update({'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
-                     'axes.spines.top': False, 'axes.spines.right': False})
+set_style()
 
-
-def add_titles(fig, title, subtitle=None):
-    """Bold figure title with an optional one-line insight (subtitle) below it.
-
-    Call after fig.tight_layout(); the text is placed just above the top of the figure.
-    """
-    def put(text, offset_pt, **kw):
-        shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
-        fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
-    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
-    if subtitle:
-        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
-
-
-def table_title(title, note=None):
-    """Print a bold table caption (and an optional italic note) above display(df)."""
-    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
-
-
-def heatmap(ax, table, cmap, vmin, vmax, fontsize=9):
-    """Annotated heatmap of a small table."""
-    ax.imshow(table.values, cmap=cmap, vmin=vmin, vmax=vmax, aspect='auto')
-    ax.set_xticks(range(table.shape[1])); ax.set_xticklabels(table.columns)
-    ax.set_yticks(range(table.shape[0])); ax.set_yticklabels(table.index)
-    ax.grid(False)
-    for i in range(table.shape[0]):
-        for j in range(table.shape[1]):
-            v = table.values[i, j]
-            if np.isfinite(v):
-                dark = abs(v - (vmin + vmax) / 2) > (vmax - vmin) * 0.2
-                ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=fontsize, color='white' if dark else '#222222')
 ```
 
 ## 2. Which stations
@@ -226,9 +163,9 @@ table_title('Table 2.2 - Solar: correlation of GHI with the generation of each f
 display(corr_solar.round(3))
 
 fig, axes = plt.subplots(1, 2, figsize=(13, 3.8))
-heatmap(axes[0], corr_wind, HEAT, 0, 1)
+annotated_heatmap(axes[0], corr_wind, HEAT, 0, 1)
 axes[0].set_title('Wind speed vs wind generation', loc='left', fontsize=10)
-heatmap(axes[1], corr_solar, HEAT, 0, 1)
+annotated_heatmap(axes[1], corr_solar, HEAT, 0, 1)
 axes[1].set_title('GHI vs solar generation', loc='left', fontsize=10)
 for ax in axes:
     ax.set_xlabel('Station')
@@ -297,9 +234,7 @@ for ax, s in zip(axes, CORRUPT_STATIONS):
     ax2.grid(False)
     ax2.spines[['top']].set_visible(False)
 
-handles, labels = [], []
-for h, l in zip(*axes[0].get_legend_handles_labels()):
-    handles.append(h); labels.append(l)
+handles, labels = axes[0].get_legend_handles_labels()
 h2, l2 = ax2.get_legend_handles_labels()
 fig.tight_layout(rect=(0, 0.06, 1, 1))
 fig.legend(handles + h2, labels + l2, loc='lower center', ncol=2, frameon=False, fontsize=9)
@@ -493,9 +428,9 @@ with pd.option_context('display.max_colwidth', None):
 use_w = [v for v in wind_X.columns if wind_rate.loc[v, 'missing %'] <= MISSING_MAX * 100]
 use_s = [v for v in solar_X.columns if solar_rate.loc[v, 'missing %'] <= MISSING_MAX * 100]
 fig, axes = plt.subplots(1, 2, figsize=(17, 6.5), gridspec_kw={'width_ratios': [3.2, 1]})
-heatmap(axes[0], wind_cc.loc[use_w, use_w], DIVERGING, -1, 1, fontsize=6.5)
+annotated_heatmap(axes[0], wind_cc.loc[use_w, use_w], CORR_CMAP, -1, 1, fontsize=6.5)
 axes[0].set_title('Wind variables', loc='left', fontsize=10)
-heatmap(axes[1], solar_cc.loc[use_s, use_s], DIVERGING, -1, 1)
+annotated_heatmap(axes[1], solar_cc.loc[use_s, use_s], CORR_CMAP, -1, 1)
 axes[1].set_title('Solar variables', loc='left', fontsize=10)
 for ax in axes:
     ax.tick_params(axis='x', rotation=45, labelsize=8)

@@ -1,23 +1,5 @@
 ---
 title: Wind speed quantile mapping (QM)
-jupyter: python3
-execute:
-  warning: false
-format:
-  html:
-    toc: true
-    code-fold: true          
-    code-overflow: wrap
-    embed-resources: true
-    grid:
-      body-width: 1100px   
-      margin-width: 250px
-    include-in-header:
-      text: |
-        <style>
-        /* Quarto sets a fixed pixel width on plots; scale them to the page instead */
-        .cell-output-display img { max-width: 100%; height: auto; }
-        </style>
 ---
 
 **Problem.** DTN wind speed is corrupted from 7 Oct 2025 to 14 Apr 2026: the values are squashed (smaller swings, smoother) while the wind farms keep generating normally. Any model that uses this weather as an input would think the wind was weak.
@@ -57,20 +39,17 @@ Loads the data and prepares the tables and helper functions that every later ste
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, sets the data folder, defines `cfg`
-# (analysis window, wind and solar assets, weather stations) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
 # Generation (MLF- and capacity-scaled) and half-hourly weather come from utilsData.
 # apply_qm=False: this file needs the RAW DTN wind speed, because it creates the QM file.
 # =============================================================================
-
-
-# pip install numpy pandas matplotlib scipy pytz ipykernel
 
 import os, sys, warnings
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from IPython.display import display
 
 warnings.filterwarnings('ignore')
 
@@ -80,24 +59,11 @@ ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
             if os.path.isdir(os.path.join(p, 'functions')))
 sys.path.append(os.path.join(ROOT, 'functions'))
 
-from utilsData import load_generation_inputs, load_weather_history, _to_naive_timestamp
+from config import DATA_DIR, make_cfg
+from utilsPlot import GREY, ORANGE, PURPLE, add_titles, table_title
+from utilsData import load_generation_inputs, load_weather_history, to_naive_timestamp
 
-DATA_DIR = os.path.join(ROOT, 'data')  # folder with raw/ and processed/
-
-cfg = {
-    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
-    'analysis_start': '2022-07-01 00:00:00',
-    'analysis_end': '2026-06-30 23:30:00',
-    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
-    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
-    'station_ids': [85280, 86338, 89002],
-    'nearest_station_by_asset': {                 # weather station used for each wind farm
-        'DUNDWF3': 89002, 'BRYB1WF1': 89002, 'BULGANA1': 89002, 'MRTLSWF1': 86338,
-    },
-    'wind_csv': os.path.join(DATA_DIR, 'raw', 'HistoricWeather_30min.csv'),   # raw wind/temperature (not QM)
-    'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
-}
-print('Configuration done. Wind assets:', cfg['wind_assets'])
+cfg = make_cfg()        # cfg['wind_csv'] is the raw DTN weather (not QM)
 
 gen_scaled, vret_data, vret_capacity = load_generation_inputs(cfg, DATA_DIR)
 weather_hh, weather_raw = load_weather_history(cfg, DATA_DIR, apply_qm=False)
@@ -114,6 +80,7 @@ print(f'Period: {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
 # =============================================================================
 # CELL 1.2 -- Build the half-hourly table (hh)
 # hh   half-hourly: wind generation of each farm, fleet total and wind speed (m/s) per station
+# Also defines the windows and masks used everywhere below (bad, ref, bad_full, ...).
 # =============================================================================
 
 
@@ -123,6 +90,22 @@ for stn in cfg['station_ids']:
     hh[f'ws_{stn}'] = weather_hh[f'wind_speed_ms_{stn}']
 hh['gen_wind'] = hh[[f'gen_{a}' for a in cfg['wind_assets']]].sum(axis=1, min_count=1)
 
+# Windows, masks and series shared by every later cell. The corrupted window (cfg['corruption_window']) is the
+# result of sections 3.3 (start, 7 Oct 2025) and 6.2 (end, 14 Apr 2026); it is set once here.
+idx = hh.index
+QM_STATIONS = [89002, 86338]                                    # the two DTN wind stations that are corrected
+STATION_ASSETS = {89002: 'DUNDWF3, BRYB1WF1, BULGANA1', 86338: 'MRTLSWF1'}   # wind farms using each station
+WINTER = [10, 11, 12, 1, 2, 3]                                  # Oct-Mar, the months of the main correction
+REF_END = '2025-07-01'                                          # clean reference = FY23-25 (before FY26)
+CORRUPT_START = pd.Timestamp(cfg['corruption_window'][0])       # 2025-10-07 00:00
+CORRUPT_END = pd.Timestamp(cfg['corruption_window'][1]) + pd.Timedelta(hours=23, minutes=30)   # 2026-04-14 23:30
+MARCH_END = pd.Timestamp('2026-03-31 23:30')                    # end of the Oct-Mar part corrected in section 4
+bad = (idx >= CORRUPT_START) & (idx <= MARCH_END)               # corrupted Oct-Mar half-hours (sections 2-5)
+ref = (idx < REF_END) & idx.month.isin(WINTER)                  # same Oct-Mar months, clean years
+bad_full = (idx >= CORRUPT_START) & (idx <= CORRUPT_END)        # whole corrupted window, incl. 1-14 April
+ws_A = hh['ws_89002']                                           # main station of the checks in sections 2-3
+gen_wind = hh['gen_wind']
+
 print(f'hh: {hh.shape}')
 print('Capacity (MW):', {k: round(float(v), 1) for k, v in vret_capacity.items()})
 ```
@@ -131,17 +114,15 @@ print('Capacity (MW):', {k: round(float(v), 1) for k, v in vret_capacity.items()
 
 - `qmap` and `apply_qm` are the correction itself. Read `qmap` first: it is the whole idea of QM in a few lines.
 - `real_sd_ratios` and `simulate_qm_recovery` are used by the validation in section 5.
-- `add_titles` and `table_title` only format figure titles and table captions.
 
 ```{python}
 # =============================================================================
-# CELL 1.3 -- QM helper functions and plot style
+# CELL 1.3 -- QM helper functions
 # Used by the QM and validation cells below:
 #   qmap                  map corrupted values onto a reference distribution, keeping their rank
 #   apply_qm              qmap applied group by group (calendar month x half-hour slot)
 #   real_sd_ratios        measured squashing (sd corrupted / sd reference) per month
 #   simulate_qm_recovery  corrupt clean winters ourselves and measure how much QM recovers
-#   add_titles, table_title  figure title + insight subtitle, table caption
 # =============================================================================
 
 
@@ -242,32 +223,6 @@ def simulate_qm_recovery(ws, sd_ratios, windows, ref_all):
     out_df['sd_err_squashed'] = (out_df['sd_squashed'] - out_df['sd_true']).abs()
     out_df['sd_err_qm'] = (out_df['sd_qm'] - out_df['sd_true']).abs()
     return out_df
-
-
-# ── Plot style ──
-GREY, ORANGE, BLUE, RED = '#888888', '#e67e22', '#391B56', '#c0392b'
-
-import matplotlib as mpl
-from IPython.display import Markdown
-
-
-def add_titles(fig, title, subtitle=None):
-    """Bold figure title with an optional one-line insight (subtitle) below it.
-
-    Call after fig.tight_layout(); the text is placed just above the top of the figure.
-    """
-    def put(text, offset_pt, **kw):
-        fig.add_artist(mpl.text.Annotation(text, xy=(0.5, 1.0), xycoords='figure fraction',
-                                           xytext=(0, offset_pt), textcoords='offset points',
-                                           ha='center', va='bottom', **kw))
-    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
-    if subtitle:
-        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
-
-
-def table_title(title, note=None):
-    """Print a bold table caption (and an optional italic note) above display(df)."""
-    display(Markdown(f'**{title}**' + (f'  \n*{note}*' if note else '')))
 ```
 
 ## 2. Evidence of corruption
@@ -288,8 +243,8 @@ If the purple line leaves the band inside the grey area while the orange line st
 # =============================================================================
 
 ws_monthly = hh['ws_89002'].resample('ME').mean()
-ref = ws_monthly[ws_monthly.index < '2025-07-01']
-band = ref.groupby(ref.index.month).agg(['min', 'max'])
+ref_months = ws_monthly[ws_monthly.index < REF_END]
+band = ref_months.groupby(ref_months.index.month).agg(['min', 'max'])
 
 # Wind fleet capacity factor (generation / capacity of the farms running in each half-hour)
 cap_wind_active_hh = sum(vret_capacity[a] * hh[f'gen_{a}'].notna().astype(float) for a in cfg['wind_assets'])
@@ -299,9 +254,9 @@ cf_wind_monthly = cf_wind_hh.resample('ME').mean()
 fig, ax = plt.subplots(figsize=(14, 4))
 band_min = band['min'].reindex(ws_monthly.index.month).values
 band_max = band['max'].reindex(ws_monthly.index.month).values
-ax.fill_between(ws_monthly.index, band_min, band_max, color=BLUE, alpha=0.15, label='Historical range (same month)')
-ax.plot(ws_monthly, '-o', color=BLUE, ms=3, label='Mean wind stn 89002 (m/s)')
-ax.axvspan(pd.Timestamp('2025-10-01'), pd.Timestamp('2026-03-31'), color=GREY, alpha=0.15, label='Corruption period')
+ax.fill_between(ws_monthly.index, band_min, band_max, color=PURPLE, alpha=0.15, label='Historical range (same month)')
+ax.plot(ws_monthly, '-o', color=PURPLE, ms=3, label='Mean wind stn 89002 (m/s)')
+ax.axvspan(CORRUPT_START, CORRUPT_END, color=GREY, alpha=0.15, label='Corruption period')
 ax2 = ax.twinx()
 ax2.plot(cf_wind_monthly, color=ORANGE, lw=1.6, label='Wind fleet capacity factor')
 ax.legend(loc='upper left'); ax2.legend(loc='upper right')
@@ -345,14 +300,10 @@ def diag(ws, gen, mask):
         'ties':  float(round((d['ws'].diff() == 0).mean(), 2)),   # repeated values -> smoothing signal
     }
 
-idx = hh.index
-bad_mask = (idx >= '2025-10-07') & (idx < '2026-04-01')                  # corruption window (starts 07/10, see §3.3)
-ref_mask = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])  # same Oct-Mar months, prior years
-
 rows = []
 for stn in cfg['station_ids']:
-    r = diag(hh[f'ws_{stn}'], hh['gen_wind'], ref_mask)
-    b = diag(hh[f'ws_{stn}'], hh['gen_wind'], bad_mask)
+    r = diag(hh[f'ws_{stn}'], gen_wind, ref)
+    b = diag(hh[f'ws_{stn}'], gen_wind, bad)
     rows.append({'station': stn,
                  'pearson_ref': r['pearson'], 'pearson_bad': b['pearson'],
                  'spearman_ref': r['spearman'], 'spearman_bad': b['spearman'],
@@ -390,12 +341,6 @@ If the right-hand cloud looks like the left one squeezed into a narrower x range
 # Does generation still rise steadily with the corrupted wind speed?
 # =============================================================================
 
-idx = hh.index
-ws_A = hh['ws_89002']
-gen_wind = hh['gen_wind']
-bad  = (idx >= '2025-10-07') & (idx < '2026-04-01')   # §3.3: corruption starts 07/10
-ref  = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
-
 # ═══════════════════════════════════════════════════════════════
 # (1) MONOTONIC? Scatter of wind speed vs wind fleet CF: reference vs corrupted
 # If the corrupted cloud is just the reference squeezed into a narrower x range, it is monotonic
@@ -404,7 +349,7 @@ cap_wind_total = sum(vret_capacity[a] for a in cfg['wind_assets'])
 cf_wind_hh = gen_wind / (0.5 * cap_wind_total)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25)', BLUE),
+for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25)', PURPLE),
                                              (bad, 'Corrupted period (Oct25-Mar26)', ORANGE)]):
     d = pd.DataFrame({'ws': ws_A[mask], 'cf': cf_wind_hh[mask]}).dropna()
     ax.scatter(d['ws'], d['cf'], s=1, alpha=0.05, color=color)
@@ -435,11 +380,6 @@ Ratios below 1 mean squashing. The coefficient of variation (CV) of the sd ratio
 # Similar ratio in every month -> one common mapping would do; otherwise map month by month.
 # =============================================================================
 
-idx = hh.index
-ws_A = hh['ws_89002']
-bad  = (idx >= '2025-10-07') & (idx < '2026-04-01')
-ref  = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
-
 # ═══════════════════════════════════════════════════════════════
 # (2) UNIFORM? Squashing ratio per month (corrupted / reference): sd, p50, p90
 # Similar ratio in every month -> one common mapping would do; otherwise map month by month
@@ -447,7 +387,7 @@ ref  = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
 print('═══ (2) Compression ratio by month (bad / same-month ref) ═══')
 print(f'{"Month":>6}  {"sd ratio":>9}  {"p50 ratio":>10}  {"p90 ratio":>10}  {"n_bad":>6}  {"n_ref":>6}')
 ratios = []
-for m in [10, 11, 12, 1, 2, 3]:
+for m in WINTER:
     b = ws_A[bad & (idx.month == m)].dropna()
     r = ws_A[ref & (idx.month == m)].dropna()
     row = {
@@ -485,11 +425,8 @@ The printed table shows the days around the start, with the verdict per day. In 
 # =============================================================================
 
 
-idx = hh.index
-ws_A = hh['ws_89002']
-
 # Reference: all Octobers before July 2025 (FY23-25)
-oct_ref = ws_A[(idx < '2025-07-01') & (idx.month == 10)]
+oct_ref = ws_A[(idx < REF_END) & (idx.month == 10)]
 ref_daily_mean = oct_ref.resample('D').mean().mean()
 ref_daily_sd   = oct_ref.resample('D').std().mean()
 ref_overall_sd = oct_ref.std()
@@ -535,7 +472,7 @@ roll_mean = oct25.rolling(48, center=True).mean()
 roll_sd   = oct25.rolling(48, center=True).std()
 
 axes[0].plot(oct25.index, oct25.values, alpha=0.3, lw=0.5, color='grey', label='HH values')
-axes[0].plot(roll_mean.index, roll_mean.values, '-', color=BLUE, lw=1.5, label='Rolling mean (24h)')
+axes[0].plot(roll_mean.index, roll_mean.values, '-', color=PURPLE, lw=1.5, label='Rolling mean (24h)')
 axes[0].axhline(ref_daily_mean, color=GREY, ls='--', label=f'Reference mean = {ref_daily_mean:.1f}')
 axes[0].axhline(ref_daily_mean * 0.5, color=ORANGE, ls=':', label='50% mean threshold')
 if first_bad_day:
@@ -543,7 +480,7 @@ if first_bad_day:
 axes[0].set_ylabel('Wind speed (m/s)')
 axes[0].legend(fontsize=7, ncol=3)
 
-axes[1].plot(roll_sd.index, roll_sd.values, '-', color=BLUE, lw=1.5, label='Rolling sd (24h)')
+axes[1].plot(roll_sd.index, roll_sd.values, '-', color=PURPLE, lw=1.5, label='Rolling sd (24h)')
 axes[1].axhline(ref_daily_sd, color=GREY, ls='--', label=f'Reference sd = {ref_daily_sd:.1f}')
 axes[1].axhline(ref_daily_sd * 0.4, color=ORANGE, ls=':', label='40% sd threshold')
 if first_bad_day:
@@ -601,18 +538,8 @@ Only weather data is used, no generation, so nothing from the target leaks in. T
 # Output: hh['ws_<station>_qm'] (equal to the original values outside the window).
 # =============================================================================
 
-idx = hh.index
-gen_wind = hh['gen_wind']
-STATIONS = [89002, 86338]
-
-# Masks: corrupted window (start day from §3.3) and clean reference months
-CORRUPT_START = pd.Timestamp('2025-10-07')
-CORRUPT_END   = pd.Timestamp('2026-03-31 23:30:00')
-bad = (idx >= CORRUPT_START) & (idx <= CORRUPT_END)
-ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
-
 summary_rows = []
-for i, stn in enumerate(STATIONS):
+for i, stn in enumerate(QM_STATIONS):
     ws = hh[f'ws_{stn}']
 
     # Apply QM group by group (month x half-hour slot); save in hh so the later cells can use it
@@ -646,7 +573,7 @@ for i, stn in enumerate(STATIONS):
     # (i) Wind speed distributions: reference vs corrupted vs QM-corrected
     for data, label, color in [(ws[ref].dropna(), 'Reference', GREY),
                                (ws[bad].dropna(), 'Before QM', ORANGE),
-                               (ws_fixed[bad].dropna(), 'QM-corrected', BLUE)]:
+                               (ws_fixed[bad].dropna(), 'QM-corrected', PURPLE)]:
         axes[0].hist(data, bins=60, alpha=0.35, density=True, color=color, label=label)
     axes[0].set_xlabel('Wind speed (m/s)'); axes[0].set_title('Distribution')
     axes[0].legend(fontsize=7)
@@ -654,14 +581,14 @@ for i, stn in enumerate(STATIONS):
     # (ii) Oct-Nov 2025 time series: clear jump at 07/10
     ts_mask = (idx >= '2025-10-01') & (idx < '2025-11-15')
     axes[1].plot(ws[ts_mask], alpha=0.6, color=ORANGE, lw=0.5, label='Before QM')
-    axes[1].plot(ws_fixed[ts_mask], alpha=0.8, color=BLUE, lw=0.5, label='QM-corrected')
+    axes[1].plot(ws_fixed[ts_mask], alpha=0.8, color=PURPLE, lw=0.5, label='QM-corrected')
     axes[1].axvline(CORRUPT_START, color=GREY, lw=2, ls='--', label='07/10')
     axes[1].set_title('Time series Oct-Nov 2025')
     axes[1].legend(fontsize=7); axes[1].set_ylabel('m/s')
 
     # (iii) Generation vs wind speed: QM-corrected points should overlap the reference cloud
     axes[2].scatter(d_ref['ws'], d_ref['gen'], s=1, alpha=0.03, color=GREY, label='Reference')
-    axes[2].scatter(d_fixed['ws'], d_fixed['gen'], s=1, alpha=0.05, color=BLUE, label='QM-corrected')
+    axes[2].scatter(d_fixed['ws'], d_fixed['gen'], s=1, alpha=0.05, color=PURPLE, label='QM-corrected')
     axes[2].set_xlabel('Wind speed (m/s)'); axes[2].set_ylabel('Wind generation (MWh)')
     axes[2].set_title('Scatter after QM (purple) vs reference (grey)')
     leg = axes[2].legend(fontsize=7, markerscale=10)
@@ -710,17 +637,11 @@ In the tables the ratios should move from below 1 to about 1 and the KS distance
 # =============================================================================
 
 
-idx = hh.index
-STATIONS = [89002, 86338]
-bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
-ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
-MONTHS = [10, 11, 12, 1, 2, 3]
-
 check, sd_ref = {}, {}
-for i, stn in enumerate(STATIONS):
+for i, stn in enumerate(QM_STATIONS):
     ws, ws_qm = hh[f'ws_{stn}'], hh[f'ws_{stn}_qm']
     rows, sd_r = [], []
-    for m in MONTHS:
+    for m in WINTER:
         r = ws[ref & (idx.month == m)].dropna()
         b = ws[bad & (idx.month == m)].dropna()
         q = ws_qm[bad & (idx.month == m)].dropna()
@@ -737,9 +658,9 @@ for i, stn in enumerate(STATIONS):
 
 # Figure: monthly sd before / after QM vs the clean reference (one row per station)
 fig, axes = plt.subplots(2, 2, figsize=(14, 8))
-x = np.arange(len(MONTHS))
+x = np.arange(len(WINTER))
 gap = {}                                                       # mean |sd - reference sd| (m/s), before and after QM
-for r_i, stn in enumerate(STATIONS):
+for r_i, stn in enumerate(QM_STATIONS):
     c = check[stn]
     sd_before, sd_after, sd_r = c['sd ratio before'] * sd_ref[stn], c['sd ratio after'] * sd_ref[stn], sd_ref[stn]
     gap[stn] = ((sd_before - sd_r).abs().mean(), (sd_after - sd_r).abs().mean())
@@ -747,7 +668,7 @@ for r_i, stn in enumerate(STATIONS):
     # Left: monthly sd, before and after QM, with the reference as diamonds
     ax = axes[r_i, 0]
     ax.bar(x - 0.2, sd_before, 0.4, color=ORANGE, alpha=0.85, label='Before QM')
-    ax.bar(x + 0.2, sd_after, 0.4, color=BLUE, alpha=0.85, label='After QM')
+    ax.bar(x + 0.2, sd_after, 0.4, color=PURPLE, alpha=0.85, label='After QM')
     ax.scatter(x, sd_r, s=60, color='black', marker='D', zorder=5, label='Clean reference (FY23-25)')
     ax.set_ylabel('Monthly sd (m/s)')
     ax.set_ylim(0, max(sd_before.max(), sd_after.max(), sd_r.max()) * 1.3)      # headroom for the legend
@@ -756,7 +677,7 @@ for r_i, stn in enumerate(STATIONS):
     # Right: distance to the reference
     ax = axes[r_i, 1]
     ax.plot(x, (sd_before - sd_r).abs(), 'o-', color=ORANGE, label='Before QM')
-    ax.plot(x, (sd_after - sd_r).abs(), 'o-', color=BLUE, label='After QM')
+    ax.plot(x, (sd_after - sd_r).abs(), 'o-', color=PURPLE, label='After QM')
     ax.axhline(0, color='black', lw=0.5)
     ax.set_ylabel('|monthly sd - reference sd| (m/s)')
     ax.set_ylim(0, max((sd_before - sd_r).abs().max(), (sd_after - sd_r).abs().max()) * 1.3)   # headroom for the legend
@@ -801,10 +722,6 @@ A test where we know the right answer.
 # =============================================================================
 
 
-idx = hh.index
-real_bad = (idx >= '2025-10-07') & (idx < '2026-04-01')
-real_ref = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3])
-
 # Simulate on two clean winters; the QM reference is the other clean winters (the simulated one is excluded)
 sim_windows = [('FY24 (Oct23-Mar24)', '2023-10-07', '2024-04-01'),
                ('FY25 (Oct24-Mar25)', '2024-10-07', '2025-04-01')]
@@ -815,21 +732,21 @@ def recovery_pct(before, after):
 
 sim_res = {}
 fig, axes = plt.subplots(2, 2, figsize=(15, 8))
-for r_i, stn in enumerate(STATIONS):
+for r_i, stn in enumerate(QM_STATIONS):
     ws = hh[f'ws_{stn}']
 
     # Squashing strength measured on the real corrupted data of this station (sd ratio per month)
-    sd_ratios = real_sd_ratios(ws, real_bad, real_ref)
+    sd_ratios = real_sd_ratios(ws, bad, ref)
     print(f'Station {stn}: real compression ratios', {m: round(float(v), 3) for m, v in sd_ratios.items()})
 
-    df_sim = simulate_qm_recovery(ws, sd_ratios, sim_windows, real_ref)
+    df_sim = simulate_qm_recovery(ws, sd_ratios, sim_windows, ref)
     sim_res[stn] = df_sim
     # One panel per simulated winter: error of the monthly sd, squashed vs after QM
     for c_i, (sim, d) in enumerate(df_sim.groupby('sim', sort=False)):
         ax = axes[r_i, c_i]
         x = np.arange(len(d))
         ax.bar(x - 0.2, d['sd_err_squashed'], 0.4, color=ORANGE, alpha=0.85, label='Squashed (no QM)')
-        ax.bar(x + 0.2, d['sd_err_qm'], 0.4, color=BLUE, alpha=0.85, label='After QM')
+        ax.bar(x + 0.2, d['sd_err_qm'], 0.4, color=PURPLE, alpha=0.85, label='After QM')
         ax.set_xticks(x); ax.set_xticklabels(d['month'], rotation=45, fontsize=8)
         ax.set_ylabel('|monthly sd - true sd| (m/s)')
         ax.set_title(f'Station {stn}, {sim}\nMean error: squashed = {d["sd_err_squashed"].mean():.2f}, '
@@ -840,13 +757,13 @@ for r_i, stn in enumerate(STATIONS):
 # Summary table: error before / after QM and recovery
 metrics = [('Monthly mean error (m/s)', 'mean_err'), ('Monthly sd error (m/s)', 'sd_err'), ('KS distance to truth', 'ks')]
 rows = []
-for stn in STATIONS:
+for stn in QM_STATIONS:
     d = sim_res[stn]
     for label, key in metrics:
         b, a = d[f'{key}_squashed'].mean(), d[f'{key}_qm'].mean()
         rows.append({'station': stn, 'metric': label, 'Squashed': b, 'After QM': a, 'Recovery (%)': recovery_pct(b, a)})
 val_summary = pd.DataFrame(rows).set_index(['station', 'metric'])
-rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in STATIONS for l, k in metrics}
+rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in QM_STATIONS for l, k in metrics}
 
 fig.tight_layout()
 add_titles(fig, 'Fig 5.2 - Simulation on clean winters: how close does QM get to the truth?',
@@ -876,14 +793,11 @@ A low `sd_ratio` or a low `mean_ratio` means the data is still squashed. The `fl
 # sd_ratio far below 1 (COMPRESSED) or a low mean ratio means the data is still squashed.
 # =============================================================================
 
-idx = hh.index
-
-# ── (a) Do Mar-Jun 2026 still look corrupted? ──
 rows = []
-for stn in [89002, 86338]:
+for stn in QM_STATIONS:
     ws = hh[f'ws_{stn}']
     for m in [3, 4, 5, 6]:
-        ref_m = ws[(idx < '2025-07-01') & (idx.month == m)].dropna()
+        ref_m = ws[(idx < REF_END) & (idx.month == m)].dropna()
         cur_m = ws[(idx.year == 2026) & (idx.month == m)].dropna()
         if len(ref_m) > 0 and len(cur_m) > 0:
             r_sd, r_mean = cur_m.std() / ref_m.std(), cur_m.mean() / ref_m.mean()
@@ -910,45 +824,29 @@ The figure shows the daily mean wind speed of April 2026 (orange) against the ty
 # =============================================================================
 
 
-idx = hh.index
-
-# ── (b) Daily detection in April 2026 ──
-for stn in [89002, 86338]:
+fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+for ax, stn in zip(axes, QM_STATIONS):
     ws = hh[f'ws_{stn}']
-    ref_apr = ws[(idx < '2025-07-01') & (idx.month == 4)]
-    ref_daily_mean = ref_apr.resample('D').mean().mean()          # reference: Aprils of FY23-25, daily mean
+    ref_dm = ws[(idx < REF_END) & (idx.month == 4)].resample('D').mean()   # Aprils of FY23-25, daily means
+    ref_mu, ref_lo, ref_hi = ref_dm.mean(), ref_dm.quantile(0.1), ref_dm.quantile(0.9)
 
-    apr26_daily = ws[(idx >= '2026-04-01') & (idx < '2026-05-01')].resample('D').agg(['mean', 'std', 'count'])
-    apr26_daily['roll3_mean'] = apr26_daily['mean'].rolling(3, center=True).mean()
-    apr26_daily['ratio_vs_ref'] = apr26_daily['mean'] / ref_daily_mean
-    apr26_daily['roll3_ratio'] = apr26_daily['roll3_mean'] / ref_daily_mean
+    apr26_daily = ws[(idx >= '2026-04-01') & (idx < '2026-05-01')].resample('D').mean().to_frame('mean')
+    apr26_daily['ratio_vs_ref'] = apr26_daily['mean'] / ref_mu
+    apr26_daily['roll3_ratio'] = apr26_daily['mean'].rolling(3, center=True).mean() / ref_mu
 
-    # Transition point: first day where the rolling ratio > 0.8
+    # Transition point: first day where the rolling ratio > 0.8, and the largest one-day jump in the ratio
     recovery_days = apr26_daily[apr26_daily['roll3_ratio'] > 0.8]
     if len(recovery_days) > 0:
         print(f'Station {stn}: first day with roll3 ratio > 0.8: {recovery_days.index[0].date()}')
-
-    # Largest one-day jump in the ratio
     ratios = apr26_daily['ratio_vs_ref'].values
-    diffs = np.diff(ratios)
-    if len(diffs) > 0:
-        k = np.argmax(diffs)
-        print(f'Station {stn}: largest daily jump: {apr26_daily.index[k + 1].date()} '
-              f'(ratio {ratios[k]:.2f} -> {ratios[k + 1]:.2f}, delta = +{diffs[k]:.2f})')
+    k = np.argmax(np.diff(ratios))
+    print(f'Station {stn}: largest daily jump: {apr26_daily.index[k + 1].date()} '
+          f'(ratio {ratios[k]:.2f} -> {ratios[k + 1]:.2f}, delta = +{ratios[k + 1] - ratios[k]:.2f})')
 
-# Plot: daily mean of April 2026 against the reference band
-fig, axes = plt.subplots(1, 2, figsize=(14, 4))
-for ax, stn in zip(axes, [89002, 86338]):
-    ws = hh[f'ws_{stn}']
-    ref_apr = ws[(idx < '2025-07-01') & (idx.month == 4)]
-    ref_dm = ref_apr.resample('D').mean()
-    ref_mu, ref_lo, ref_hi = ref_dm.mean(), ref_dm.quantile(0.1), ref_dm.quantile(0.9)
-    
-    apr26 = ws[(idx >= '2026-04-01') & (idx < '2026-05-01')].resample('D').mean()
-    
+    # Plot: daily mean of April 2026 against the reference band
     ax.axhspan(ref_lo, ref_hi, color=GREY, alpha=0.2, label='Ref Apr p10-p90')
     ax.axhline(ref_mu, color=GREY, ls='--', lw=1, label=f'Ref Apr mean ({ref_mu:.1f})')
-    ax.plot(apr26.index.day, apr26.values, 'o-', color=ORANGE, ms=4, lw=1.2, label='Apr 2026')
+    ax.plot(apr26_daily.index.day, apr26_daily['mean'].values, 'o-', color=ORANGE, ms=4, lw=1.2, label='Apr 2026')
     ax.set(xlabel='Day of April', ylabel='Daily mean wind speed (m/s)')
     ax.set_title(f'Station {stn}', loc='left', fontsize=10)
     ax.legend(frameon=False, fontsize=8)
@@ -977,18 +875,12 @@ The mean and sd ratios against the April reference should move towards 1 after Q
 # Output: hh['ws_89002_qm'] and hh['ws_86338_qm'] are now corrected up to 2026-04-14 23:30.
 # =============================================================================
 
-idx = hh.index
-
-# Extension window: Apr 1 00:00 to Apr 14 23:30
-EXT_START = pd.Timestamp('2026-04-01')
-EXT_END   = pd.Timestamp('2026-04-14 23:30:00')
-ext_mask = (idx >= EXT_START) & (idx <= EXT_END)
-
-# Reference: April from clean years (FY23-25)
-ref_apr = (idx < '2025-07-01') & (idx.month == 4)
+# Extension window: 1 April 00:00 to the end of the corrupted window (14 April 23:30); reference: Aprils of FY23-25
+ext_mask = (idx > MARCH_END) & (idx <= CORRUPT_END)
+ref_apr = (idx < REF_END) & (idx.month == 4)
 
 ext_rows = []
-for stn in [89002, 86338]:
+for stn in QM_STATIONS:
     ws = hh[f'ws_{stn}']
     ws_qm_col = f'ws_{stn}_qm'
 
@@ -1014,8 +906,7 @@ for stn in [89002, 86338]:
 table_title('Table 6.3 - QM extended to 1-14 April 2026',
             'Mean and sd ratios vs the April reference (FY23-25) should move towards 1')
 display(pd.DataFrame(ext_rows).set_index('station').round(3))
-print('Corruption window used from here on: 2025-10-07 -> 2026-04-14 23:30 '
-      f'({((idx >= "2025-10-07") & (idx <= "2026-04-14 23:30:00")).sum():,} HH)')
+print(f'Corruption window used from here on: {CORRUPT_START} -> {CORRUPT_END} ({bad_full.sum():,} HH)')
 ```
 
 ## 7. Save the corrected weather file
@@ -1029,7 +920,7 @@ Writes the file that the forecast notebooks read. It runs after section 6.3 so t
 ```{python}
 # =============================================================================
 # CELL 7.1 -- Save the QM-corrected weather file (read by the forecast notebook)
-# Input:  raw DTN data (cfg["wind_csv"]) for stations 89002 and 86338.
+# Input:  raw DTN data of stations 89002 and 86338 (weather_raw, loaded in cell 1.1).
 # Output: data/processed/QM_HistoricWeather_30min.csv with temp_c, rh, wind_speed_kph, wind_dir_degrees
 #         per station, plus the flag qm_corrected (1 inside the corrupted window).
 # Only wind_speed_kph changes, and only from 2025-10-07 to 2026-04-14: it is replaced by the QM
@@ -1038,27 +929,17 @@ Writes the file that the forecast notebooks read. It runs after section 6.3 so t
 # =============================================================================
 
 
-import os
-
-# ── (1) Read the raw DTN data for the 2 stations ───────────────
-STATIONS = [89002, 86338]
-df_dtn = pd.read_csv(
-    cfg['wind_csv'],
-    usecols=['related_location', 'obs_time_local', 'temp_c', 'rh', 'wind_speed_kph', 'wind_dir_degrees'],
-).rename(columns={'related_location': 'station_id', 'obs_time_local': 'datetime'})
-
-# Same timestamp cleaning as the weather loader (defined in the load cell)
-df_dtn['datetime'] = _to_naive_timestamp(df_dtn['datetime'])
-df_dtn['station_id'] = pd.to_numeric(df_dtn['station_id'], errors='coerce')
-df_dtn = df_dtn[df_dtn['station_id'].isin(STATIONS)
-                & (df_dtn['datetime'] >= '2022-07-01')
-                & (df_dtn['datetime'] < '2026-07-01')].sort_values(['datetime', 'station_id'])
+# ── (1) Raw DTN data of the 2 stations (weather_raw from cell 1.1: timestamps already cleaned) ──
+df_dtn = (weather_raw.rename(columns={'ts_local': 'datetime'})
+          .loc[lambda d: d['station_id'].isin(QM_STATIONS),
+               ['station_id', 'datetime', 'temp_c', 'rh', 'wind_speed_kph', 'wind_dir_degrees']]
+          .sort_values(['datetime', 'station_id']))
 
 print(f'Raw DTN data: {len(df_dtn):,} rows ({len(df_dtn)//2:,} HH × 2 stations)')
 
 # ── (2) One row per half-hour, one column per metric and station ──
 dfs = []
-for stn in STATIONS:
+for stn in QM_STATIONS:
     d = df_dtn[df_dtn['station_id'] == stn].set_index('datetime')
     d = d[['temp_c', 'rh', 'wind_speed_kph', 'wind_dir_degrees']]
     d.columns = [f'{c}_{stn}' for c in d.columns]
@@ -1068,40 +949,35 @@ df_wide = dfs[0].join(dfs[1], how='outer').sort_index()
 print(f'Wide format: {len(df_wide):,} rows, columns: {list(df_wide.columns)}')
 
 # ── (3) Replace wind_speed_kph with the QM series inside the corrupted window ────────────
-CORRUPT_START = pd.Timestamp('2025-10-07')
-CORRUPT_END   = pd.Timestamp('2026-04-14 23:30:00')
-bad = (df_wide.index >= CORRUPT_START) & (df_wide.index <= CORRUPT_END)
+in_window = (df_wide.index >= CORRUPT_START) & (df_wide.index <= CORRUPT_END)
 
 for stn, col_qm in [(89002, 'ws_89002_qm'), (86338, 'ws_86338_qm')]:
     ws_col = f'wind_speed_kph_{stn}'
     # QM series is in m/s; the file stores kph
     qm_kph = (hh[col_qm] * 3.6).round(2)
     # Replace the corrupted window only, keep the clean part
-    overlap = df_wide.index[bad].intersection(qm_kph.index)
+    overlap = df_wide.index[in_window].intersection(qm_kph.index)
     df_wide.loc[overlap, ws_col] = qm_kph.loc[overlap].values
     print(f'  Station {stn}: replaced {len(overlap):,} HH of wind_speed_kph with QM')
 
 # Add the qm_corrected flag
-df_wide['qm_corrected'] = bad.astype(int)
+df_wide['qm_corrected'] = in_window.astype(int)
 
 # ── (4) Save CSV ─────────────────────────────────────────────────
-out_dir = os.path.join(DATA_DIR, 'processed')
-os.makedirs(out_dir, exist_ok=True)
-fname = 'QM_HistoricWeather_30min.csv'
-
-fpath = os.path.join(out_dir, fname)
+fpath = os.path.join(DATA_DIR, 'processed', 'QM_HistoricWeather_30min.csv')
+os.makedirs(os.path.dirname(fpath), exist_ok=True)
 df_wide.to_csv(fpath, index=True, index_label='datetime')
 print(f'\n✔ Saved: {fpath}')
 print(f'  {len(df_wide):,} rows, {len(df_wide.columns)} columns')
-print(f'  QM window: {CORRUPT_START.date()} → {CORRUPT_END.date()} ({bad.sum():,} HH)')
+print(f'  QM window: {CORRUPT_START.date()} → {CORRUPT_END.date()} ({in_window.sum():,} HH)')
 
 # ── (5) Quick check ──────────────────────────────────────────
 table_title('Table 7.1 - First rows of the saved QM file')
 display(df_wide.head())
 
 print(f'\n═══ QM window: statistics ═══')
-qm_section = df_wide[bad]
-for stn in STATIONS:
+qm_section = df_wide[in_window]
+for stn in QM_STATIONS:
     ws_col = f'wind_speed_kph_{stn}'
     print(f'  {stn}: mean={qm_section[ws_col].mean():.1f} kph, '
           f'sd={qm_section[ws_col].std():.1f}, '
@@ -1122,17 +998,14 @@ The distribution of the QM-corrected wind speed (7 Oct 2025 - 14 Apr 2026) again
 # Table: how close the corrected distribution is to the clean reference.
 # =============================================================================
 
-idx = hh.index
-ref_mask = (idx < '2025-07-01') & idx.month.isin([10, 11, 12, 1, 2, 3, 4])
-bad_mask = (idx >= '2025-10-07') & (idx <= '2026-04-14 23:30:00')   # full corruption window
+ref_oct_apr = (idx < REF_END) & idx.month.isin(WINTER + [4])       # clean Oct-Apr months of FY23-25
 
-ws_data = {stn: {'ref': hh[f'ws_{stn}'][ref_mask].dropna(),
-                 'bad': hh[f'ws_{stn}'][bad_mask].dropna(),
-                 'qm':  hh[f'ws_{stn}_qm'][bad_mask].dropna()} for stn in [89002, 86338]}
-_assets = {89002: 'DUNDWF3, BRYB1WF1, BULGANA1', 86338: 'MRTLSWF1'}
+ws_data = {stn: {'ref': hh[f'ws_{stn}'][ref_oct_apr].dropna(),
+                 'bad': hh[f'ws_{stn}'][bad_full].dropna(),
+                 'qm':  hh[f'ws_{stn}_qm'][bad_full].dropna()} for stn in QM_STATIONS}
 
 # Table: distribution of the QM-corrected values vs the reference (both stations)
-for i, stn in enumerate([89002, 86338]):
+for i, stn in enumerate(QM_STATIONS):
     r, q = ws_data[stn]['ref'], ws_data[stn]['qm']
     stats = pd.DataFrame({'Reference': r.describe(percentiles=[.1, .5, .9]),
                           'After QM':  q.describe(percentiles=[.1, .5, .9])}
@@ -1157,30 +1030,26 @@ Outside the shaded area the two lines are identical. Inside it, the orange line 
 # One shared legend at the bottom of the figure.
 # =============================================================================
 
-idx = hh.index
-bad_mask = (idx >= '2025-10-07') & (idx <= '2026-04-14 23:30:00')   # full corruption window
-_assets = {89002: 'DUNDWF3, BRYB1WF1, BULGANA1', 86338: 'MRTLSWF1'}
-
 fig, axes = plt.subplots(2, 1, figsize=(16, 7.5))
 
-for ax, stn in zip(axes, [89002, 86338]):
+for ax, stn in zip(axes, QM_STATIONS):
     ws_orig = hh[f'ws_{stn}']
     ws_prod = hh[f'ws_{stn}'].copy()
-    ws_prod[bad_mask] = hh[f'ws_{stn}_qm'][bad_mask]
+    ws_prod[bad_full] = hh[f'ws_{stn}_qm'][bad_full]
 
     # Daily mean for readability
     orig_d = ws_orig.resample('D').mean()
     prod_d = ws_prod.resample('D').mean()
 
     ax.plot(orig_d, color=ORANGE, lw=0.6, alpha=0.7, label='Original (with corruption)')
-    ax.plot(prod_d, color=BLUE, lw=0.6, alpha=0.7, label='Production (QM-corrected)')
+    ax.plot(prod_d, color=PURPLE, lw=0.6, alpha=0.7, label='Production (QM-corrected)')
 
     # Shade corruption window
-    ax.axvspan(pd.Timestamp('2025-10-07'), pd.Timestamp('2026-04-14'),
+    ax.axvspan(CORRUPT_START, CORRUPT_END,
                color=ORANGE, alpha=0.08, label='Corruption window')
 
     ax.set(ylabel='Wind speed (m/s, daily mean)')
-    ax.set_title(f'Station {stn} ({_assets[stn]})', loc='left', fontsize=10)
+    ax.set_title(f'Station {stn} ({STATION_ASSETS[stn]})', loc='left', fontsize=10)
     ax.spines[['top', 'right']].set_visible(False)
 
 axes[1].tick_params(axis='x', rotation=30)

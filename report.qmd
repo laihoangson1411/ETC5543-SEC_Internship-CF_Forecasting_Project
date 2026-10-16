@@ -69,159 +69,38 @@ editor: visual
 \setcounter{page}{1}
 
 ```{python}
-#| label: Imports and configuration
+#| label: setup
+#| output: false
 
 # =============================================================================
-# CELL: Imports and configuration
-# Imports libraries and project functions (utilsData, utilsModels, utilsScenario),
-# sets the data folder, and defines the
-# `cfg` dict (analysis window, train/test FYs, assets, weather stations, model params).
+# CELL: Set-up
+# The report reads the results written by the analysis notebooks (render them first, see README.md):
+#   monthly_cf  monthly contract factors (data/processed/HistoricContractFactors.csv, IDA_ContractFactors.qmd)
+#   forecasts   FY27-29 forecast of each model (data/forecast/FY27-29_<Model>.csv, CF_Forecast_FY27-29.qmd)
+# The configuration and the plot style are the ones of the notebooks (functions/config.py, functions/utilsPlot.py).
 # =============================================================================
 
-# pip install numpy pandas matplotlib seaborn plotly scipy scikit-learn statsmodels xgboost lightgbm pytz ipykernel
-
-import os
-import sys
-import warnings
-import datetime as dt
-from typing import Dict, Tuple
+import glob, os, sys, warnings
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings('ignore')
 
-# Project functions live in ../functions (notebook runs from notebooks/)
-sys.path.append(os.path.abspath('./functions'))
+# Find the project root (the folder that contains 'functions/')
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
 
-# Data, model and scenario helpers (the other .py files are imported by these)
-from utilsContractFactors import getFY
-from utilsData import (_to_naive_timestamp, _reindex_and_interpolate, month_end_labels,
-                       load_generation_inputs, build_targets, load_weather_history)
-from utilsModels import run_all_models, predict_method
-from utilsScenario import (shrink_factor, load_forward_twap_monthly, build_scenario_table,
-                           predict_scenarios, monthly_depth, summarise)
+from config import FORECAST_DIR, make_cfg
+from utilsPlot import set_style, add_titles, table_title
+from utilsData import add_calendar_features
 
-DATA_DIR = './data'  # folder with all input CSVs
+cfg = make_cfg()
+set_style(small_fonts=True)
 
-cfg = {
-    'random_seed': 42,
-    'zero_dollar_floor': True,                    # floor prices at $0 when computing contract revenue
-
-    # Train/test split by financial year (FY ends in June)
-    'train_fys': [2023, 2024, 2025],
-    'test_fys': [2026],
-    'analysis_start': '2022-07-01 00:00:00',
-    'analysis_end': '2026-06-30 23:30:00',
-
-    # Assets and weather stations
-    'wind_assets': ['DUNDWF3', 'BRYB1WF1', 'BULGANA1', 'MRTLSWF1'],
-    'solar_assets': ['WINTSF1', 'GLENSF1', 'COHUNSF1'],
-    'station_ids': [85280, 86338, 89002],
-    'driver_stations': [86338, 89002],            # stations averaged into the monthly wind features
-    'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
-    'corruption_range': ('2025-10-07', '2026-04-14'),  # period with corrupted wind speed data
-
-    # Model settings
-    'sarimax_order': (1, 0, 0),
-    'rf_params': {
-        'n_estimators': 300,
-        'max_depth': 4,
-        'min_samples_leaf': 2,
-        'random_state': 42,
-    },
-    'xgb_params': {
-        'n_estimators': 250,
-        'max_depth': 3,
-        'learning_rate': 0.05,
-        'subsample': 0.9,
-        'colsample_bytree': 0.9,
-        'reg_lambda': 1.0,
-        'random_state': 42,
-    },
-    'lgbm_params': {
-        'n_estimators': 200,
-        'max_depth': 3,
-        'learning_rate': 0.05,
-        'min_child_samples': 3,
-        'random_state': 42,
-        'verbose': -1,
-    },
-    'alpha_grid': np.logspace(0, 2, 15),          # candidate alphas for RidgeCV
-}
-
-ALL_ASSETS = cfg['wind_assets'] + cfg['solar_assets']
-np.random.seed(cfg['random_seed'])
-```
-
-```{python}
-#| label: Load weather history
-#| output: false
-
-# =============================================================================
-# CELL: Load weather history 
-# Reads DTN wind/temperature and Solcast solar data from data/ for the chosen stations,
-# overrides wind_speed_kph at stations 89002/86338 with the quantile-mapped (QM) series,
-# and builds `weather_hh` (half-hourly, wide: one column per metric and station)
-# plus `weather_raw` (long-format wind data).
-# =============================================================================
-
-weather_hh, weather_raw = load_weather_history(cfg, './data')
-print('Weather history rows:', len(weather_hh))
-```
-
-```{python}
-#| label: Load generation inputs
-#| output: false
-
-# =============================================================================
-# CELL: Load generation inputs 
-# Reads NEMSight generation, VRET asset data, exclusion periods and MLF from data/,
-# applies exclusions (set to NaN), MLF and contracted-capacity scaling, and builds
-# the half-hourly generation table `gen_scaled` (ALL_ASSETS + VIC1Price)
-# plus asset capacities (MW). Exclusion periods are left as NaN.
-# =============================================================================
-
-gen_scaled, vret_data, capacity = load_generation_inputs(cfg, DATA_DIR)
-
-print(f'Generation: {gen_scaled.shape[0]:,} rows x {gen_scaled.shape[1]} cols')
-print(f'Period: {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
-print('\nMissing share per asset (%):')
-print((gen_scaled[ALL_ASSETS].isna().mean() * 100).round(1).to_string())
-print('\nCapacity (MW):', {k: round(v, 1) for k, v in capacity.items()})
-```
-
-```{python}
-#| label: Load price forecast and LGC prices
-#| output: false
-
-# =============================================================================
-# CELL: Load price forecast and LGC prices
-# Reads the half-hourly VIC forward price curve (Central scenario) and the monthly
-# LGC/STC/VEEC certificate prices from data/.
-# =============================================================================
-
-# 1. Half-hourly VIC price forecast (Central scenario)
-price_forecast = pd.read_csv(
-    os.path.join(DATA_DIR, 'VIC_Central_30min_PriceForecast.csv'),
-    parse_dates=['Time-ending'],
-    dayfirst=True,  # dates are dd/mm/yyyy
-)
-price_forecast = price_forecast.set_index('Time-ending').sort_index()
-print(f'Price forecast: {len(price_forecast):,} rows, {price_forecast.index.min()} to {price_forecast.index.max()}')
-display(price_forecast.head())
-
-# 2. Monthly LGC / STC / VEEC certificate prices
-lgc_prices = pd.read_csv(
-    os.path.join(DATA_DIR, '20260424_HistoricLGCPrice.csv'),
-    index_col=0,
-    parse_dates=True,
-    dayfirst=True,
-    encoding='utf-8-sig',  # strips the BOM that Excel adds to CSV files
-)
-lgc_prices.index.name = 'Date'
-print(f'\nLGC prices: {len(lgc_prices)} rows, {lgc_prices.index.min().strftime("%Y-%m")} to {lgc_prices.index.max().strftime("%Y-%m")}')
-display(lgc_prices.tail(10))
+monthly_cf = add_calendar_features(pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True))
+forecasts = {os.path.basename(p)[len('FY27-29_'):-len('.csv')]: pd.read_csv(p, parse_dates=['Time-ending'])
+             for p in sorted(glob.glob(os.path.join(FORECAST_DIR, 'FY27-29_*.csv')))}
 ```

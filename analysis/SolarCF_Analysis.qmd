@@ -1,0 +1,326 @@
+---
+title: "Solar contract factor: models and FY26 test"
+---
+
+**Goal.** Forecast the monthly **solar** contract factor (CF = DWAP+ / TWAP, zero-dollar floor) of the solar portfolio and test how good the models are on the last full financial year (FY26), after training on FY23-25. The monthly CF is read from `data/processed/HistoricContractFactors.csv`, written by `IDA_ContractFactors.qmd`. Solar uses the **original** weather (the quantile mapping only concerns wind speed).
+
+**Models.** Two baselines (Seasonal Naive, Exponential CF-vs-TWAP) and four weather-driven models (Linear, Ridge, Random Forest, XGBoost) plus an Ensemble (mean of RF and XGBoost). The weather-driven models use the raw monthly GHI, the price split into `twap_neg` / `twap_pos` and the season (`month_sin`, `month_cos`), as the wind models do. Fleet availability (`solar_share`) and air temperature were tested and left out: neither lowered the forecast error, `solar_share` mostly tracks the time trend and temperature repeats GHI and the season.
+
+**Scenario forecast.** Same method as `WindCF_Analysis.qmd`: a forecast TWAP `T` (monthly mean of the price forecast `PriceForecast_30min.csv`) and the *historical* GHI and price structure of the same calendar month (FY23, FY24, FY25). Negative prices are shrunk by the **LGC factor** (see `EDA.qmd`, section 4) and positive prices are rescaled so the month's TWAP equals `T`. The prediction is the median over the three historical years and is always compared with the **actual CF**.
+
+**Flow**
+
+1. Set-up: load data, build the monthly feature table
+
+2. Feature selection: feature sets and VIF
+
+3. Models: test-year results with real inputs
+
+4. Forecast the test year with a forecast TWAP: LGC link, forecast rows, evaluation
+
+5. Forecast plots
+
+**Next.** `CF_Forecast_FY27-29.qmd` (part 4, Solar) retrains the models on FY23-26 and forecasts FY27-29.
+
+## 1. Set-up
+
+```{python}
+# =============================================================================
+# CELL 1.1 -- Imports, configuration and data loading
+# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
+#  - monthly CF and TWAP come from processed/HistoricContractFactors.csv (written by IDA_ContractFactors.qmd)
+#  - the half-hourly generation and price and the half-hourly weather come from utilsData (apply_qm=False: original weather)
+#  - T_forecast: monthly TWAP of the VIC 30-min price forecast (the forecast TWAP), same file as the wind models
+#  - lgc_m: monthly LGC price (month-start index)
+# =============================================================================
+
+import os, sys, warnings
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from IPython.display import display
+
+warnings.filterwarnings('ignore')
+
+# Find the project root (the folder that contains 'functions/'),
+# whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
+ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+            if os.path.isdir(os.path.join(p, 'functions')))
+sys.path.append(os.path.join(ROOT, 'functions'))
+
+from config import DATA_DIR, make_cfg
+from utilsPlot import PURPLE, GREY, set_style, add_titles, table_title
+from utilsData import (load_generation_inputs, load_weather_history, add_calendar_features,
+                       monthly_station_mean, build_twap_split_monthly, month_start)
+from utilsScenario import load_forecast_twap_monthly, load_lgc_monthly, fit_depth_model, build_scenario_table
+from utilsModels import run_all_models, predict_method, predict_exponential
+
+cfg = make_cfg()
+np.random.seed(cfg['random_seed'])
+set_style(small_fonts=True)
+
+gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
+weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=False)   # original weather (no QM)
+price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
+
+T_forecast = load_forecast_twap_monthly(cfg['price_forecast_csv'])
+lgc_m = load_lgc_monthly(cfg['lgc_csv'])
+print(f'Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}')
+print(f'LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}')
+print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+```
+
+```{python}
+# =============================================================================
+# CELL 1.2 -- Monthly feature table df_solar
+# One row per month with: target (SOLAR portfolio CF), the plain monthly twap, the split price features
+# twap_neg / twap_pos (an empty bucket is 0), neg_share (share of negative half-hours, needed to rescale the split
+# to a target TWAP), month_sin/cos, FY, Season, ghi (mean of the solar stations) and CF_lag12 (Seasonal Naive).
+# =============================================================================
+
+monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
+monthly_target = add_calendar_features(monthly_target)                          # month_sin/cos, FY, Season
+split = build_twap_split_monthly(price_hh, fill_empty=True)
+
+
+df_solar = pd.DataFrame(index=monthly_target.index)
+df_solar['target'] = monthly_target['SOLAR_ContractFactor']
+df_solar['twap'] = monthly_target['VIC1Price_TWAP']
+df_solar[['twap_neg', 'twap_pos', 'neg_share']] = split.reindex(df_solar.index)
+for col in ['month_sin', 'month_cos', 'FY', 'Season']:
+    df_solar[col] = monthly_target[col]
+df_solar['ghi'] = monthly_station_mean(weather_hh, 'ghi', cfg['solar_stations']).reindex(df_solar.index)
+df_solar['CF_lag12'] = df_solar['target'].shift(12)          # same month one year earlier (Seasonal Naive)
+
+TRAIN_FYS = cfg['train_fys']
+TEST_FYS = cfg['test_fys']
+TEST_MONTHS = df_solar.index[df_solar['FY'].isin(TEST_FYS)]
+
+print(f"SOLAR: {len(df_solar)} monthly rows, train = {df_solar['FY'].isin(TRAIN_FYS).sum()}, "
+      f"test = {len(TEST_MONTHS)}")
+display(df_solar.tail(3).round(3))
+```
+
+## 2. Feature selection
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- Solar feature set and VIF
+# The models and their features come from config.py (cfg['models'], cfg['solar_features']; EDIT THERE, so that
+# CF_Forecast_FY27-29.qmd uses the same set). Seasonal Naive uses CF_lag12 and the Exponential
+# baseline uses the plain twap, so neither has an entry. The Ensemble is the mean of RF and XGBoost.
+# The VIF of the Linear features (training years only) checks multicollinearity: VIF > 5 is moderate and VIF > 10 severe.
+# =============================================================================
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+FEATURES_SOLAR = {m: cfg['solar_features'] for m in cfg['models']}
+table_title('Table 2.1 - features of each model')
+with pd.option_context('display.max_colwidth', None):
+    display(pd.Series({m: ', '.join(f) for m, f in FEATURES_SOLAR.items()}, name='features').to_frame())
+
+X_vif = df_solar.loc[df_solar['FY'].isin(TRAIN_FYS), FEATURES_SOLAR['Linear']].dropna()
+X_vif.insert(0, 'const', 1)
+vif_df = pd.DataFrame({'Feature': X_vif.columns,
+                       'VIF': [variance_inflation_factor(X_vif.values, i) for i in range(X_vif.shape[1])]})
+table_title('Table 2.2 - VIF of the Linear features', f'train FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100}')
+display(vif_df.round(2))
+```
+
+## 3. Models
+
+All models are fitted on the training years. Table 3.1 gives their error on the test year using the real test-year inputs (actual GHI and actual prices); section 4 replaces them with a forecast.
+
+```{python}
+# =============================================================================
+# CELL 3.1 -- Run all models
+# utilsModels.run_all_models fits every model on cfg['train_fys'] and scores it on cfg['test_fys'].
+# Outputs: `results_df` (one metrics row per method) and `fitted` (predictions, fitted objects and
+# features per method, reused by the forecast cells).
+# =============================================================================
+
+MODEL_ORDER = cfg['models'] + ['Ensemble']                      # Ensemble = mean of RF and XGBoost
+BASELINES = ['Seasonal Naive', 'Exponential']
+
+rows, fitted = run_all_models(df_solar, cfg, FEATURES_SOLAR)
+results_df = pd.DataFrame(rows).set_index('method')
+
+table_title('Table 3.1 - SOLAR contract factor on the test year (real test-year inputs)',
+            f'test year FY{TEST_FYS[0] % 100}; sorted by MAE')
+display(results_df.sort_values('MAE')[['n', 'MAE', 'RMSE', 'MAPE', 'R2']].round(4))
+```
+
+## 4. Forecast the test year with a forecast TWAP
+
+### 4.1 LGC link and forecast functions
+
+The negative-price shrink uses the depth model `depth = a + b x LGC` of `EDA.qmd` (section 4.2), fitted again here on the same data so this file runs on its own.
+
+```{python}
+# =============================================================================
+# CELL 4.1 -- LGC depth model, forecast settings and forecast functions
+#  build_forecast_table  one feature row per (test month, historical FY): the GHI and price structure of that
+#                        historical month, with negative prices shrunk by the LGC factor and positive prices
+#                        re-targeted to the forecast TWAP (utilsScenario.build_scenario_table)
+#  predict_any           prediction of any baseline or model on such a table
+# =============================================================================
+
+MODE = 'empirical'      # shrink-factor mode: 'empirical' (keeps the non-LGC floor) or 'lgc_ratio'
+DEPTH_Q = 0.05          # quantile used as the negative-price depth measure
+
+depth_fit = fit_depth_model(price_hh, lgc_m, DEPTH_Q)
+a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
+print(f'Depth model: depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC  ({depth_fit["months"]} months)  |  MODE = {MODE}')
+
+SCENARIO_FYS = list(TRAIN_FYS)                           # historical years that supply GHI / price structure
+T_MAIN = 'forecast'                                       # T used in the main tables and plots
+
+
+def build_forecast_table(d, t_target):
+    """One feature row per (test month, historical FY); meta columns _month, _fy, _actual, _T."""
+    return build_scenario_table(d, d['neg_share'], t_target, SCENARIO_FYS, lgc_m, MODE, (a_lgc, b_lgc),
+                                versions=(('lgc_adj', True),))
+
+
+def predict_any(method, tbl):
+    """Seasonal Naive reads CF_lag12 of the row's month; Exponential evaluates its curve at the row's T (_T)."""
+    if method == 'Seasonal Naive':
+        return tbl['_month'].map(df_solar['CF_lag12']).values
+    if method == 'Exponential':
+        return predict_exponential(fitted['Exponential']['model'], tbl['_month'].map(df_solar['Season']), tbl['_T'])
+    return predict_method(fitted, method, tbl)
+```
+
+### 4.2 Run the forecast evaluation
+
+`T` is the forecast TWAP of each test month: the monthly mean of the price forecast `PriceForecast_30min.csv` (`T = forecast`). The models predict the CF of each test month once per historical year; the **median** over the historical years is the forecast, the min-max range is its band.
+
+```{python}
+# =============================================================================
+# CELL 4.2 -- Run the forecast evaluation
+# Outputs: `forecast_df_all` (one row per prediction), `agg_all` (median, band and errors per month),
+# `mae_all` (MAE by T source / method).
+# =============================================================================
+
+T_by_source = {'forecast': T_forecast.reindex(TEST_MONTHS)}       # forecast TWAP T per test month
+assert T_by_source['forecast'].notna().all(), 'price forecast does not cover all test months'
+missing_lgc = [m.strftime('%Y-%m') for m in TEST_MONTHS if m.to_period('M').to_timestamp() not in lgc_m.index]
+if missing_lgc:
+    print(f'WARNING: no LGC price for test months {missing_lgc}: the LGC shrink is 1.0 (no adjustment) there.')
+
+frames = []
+for t_source, t_target in T_by_source.items():
+    tbl = build_forecast_table(df_solar, t_target)
+    for method in BASELINES + MODEL_ORDER:
+        if method in MODEL_ORDER[:-1] and fitted[method]['model'] is None:
+            continue
+        tmp = tbl[['_month', '_fy', '_actual', '_T']].rename(columns={'_month': 'month', '_fy': 'scenario_fy',
+                                                                       '_actual': 'actual_cf', '_T': 'T'})
+        tmp['t_source'], tmp['method'], tmp['pred_cf'] = t_source, method, predict_any(method, tbl)
+        frames.append(tmp)
+forecast_df_all = pd.concat(frames, ignore_index=True)
+
+# Median across historical FYs per month (+ min-max band), then error vs the ACTUAL CF
+agg_all = forecast_df_all.groupby(['t_source', 'month', 'method']).agg(
+    pred_median=('pred_cf', 'median'), lo=('pred_cf', 'min'), hi=('pred_cf', 'max'),
+    actual_cf=('actual_cf', 'first')).reset_index()
+agg_all['abs_error'] = (agg_all['pred_median'] - agg_all['actual_cf']).abs()
+agg_all['bias'] = agg_all['pred_median'] - agg_all['actual_cf']           # > 0: forecast above actual
+agg_all['inside'] = agg_all['actual_cf'].between(agg_all['lo'], agg_all['hi'])
+agg_all['width'] = agg_all['hi'] - agg_all['lo']
+
+mae_all = agg_all.groupby(['t_source', 'method'])['abs_error'].mean()
+print(f'Total forecast predictions: {len(forecast_df_all):,}')
+```
+
+### 4.3 Forecast report
+
+```{python}
+# =============================================================================
+# CELL 4.3 -- Forecast report
+#  1. MAE of every method: real test-year inputs (Table 3.1) and the scenario forecast (T = forecast).
+#  2. Mean bias (forecast - actual CF).
+#  3. Interval coverage (weather-driven models only): share of test months where the actual CF lies inside
+#     [min, max] of the historical-year predictions. Benchmark (n-1)/(n+1) for n = 3 years = 50%.
+# =============================================================================
+
+mae_tbl = mae_all.unstack('t_source').reindex(BASELINES + MODEL_ORDER)
+mae_tbl.columns = [f'scenario, T = {c}' for c in mae_tbl.columns]
+mae_tbl.insert(0, 'real inputs', results_df['MAE'].reindex(mae_tbl.index))
+table_title('Table 4.1 - MAE vs the actual CF: real inputs and scenario forecast',
+            f'sorted by the scenario MAE with T = {T_MAIN}')
+display(mae_tbl.sort_values(f'scenario, T = {T_MAIN}').round(4))
+
+table_title('Table 4.2 - mean bias (forecast - actual CF)', f'T = {T_MAIN}; average over the test months; > 0 means the forecast is too high')
+display(agg_all[agg_all['method'].isin(MODEL_ORDER)].groupby('method')['bias'].mean().reindex(MODEL_ORDER).to_frame('mean bias').round(3))
+
+n_scen = len(SCENARIO_FYS)
+cov_benchmark = (n_scen - 1) / (n_scen + 1)
+cov = (agg_all[(agg_all['t_source'] == T_MAIN) & agg_all['method'].isin(MODEL_ORDER)]
+       .groupby('method').agg(coverage=('inside', 'mean'), mean_width=('width', 'mean'))
+       .sort_values('coverage', ascending=False).round(3))
+cov['flag'] = np.where(cov['coverage'] >= cov_benchmark, 'ok', 'narrow')
+table_title(f'Table 4.3 - interval coverage (T = {T_MAIN})',
+            f'actual CF inside [min, max] of {n_scen} predictions; benchmark {cov_benchmark:.0%}')
+display(cov)
+```
+
+## 5. Forecast plots
+
+```{python}
+# =============================================================================
+# CELL 5.1 -- MAE by model (scenario forecast, T = T_MAIN), sorted from lowest to highest,
+# with the baselines as horizontal lines
+# =============================================================================
+
+mae_main = mae_all.xs(T_MAIN, level='t_source')
+mae_models = mae_main.reindex(MODEL_ORDER).sort_values()       # lowest MAE first
+x = np.arange(len(mae_models))
+fig, ax = plt.subplots(figsize=(9, 4.5))
+bars = ax.bar(x, mae_models, 0.6, color=PURPLE, label='Scenario (forecast T, LGC-adjusted)')
+ax.bar_label(bars, fmt='%.3f', fontsize=7)
+for b, ls, col in [('Seasonal Naive', '--', 'blue'), ('Exponential', ':', 'red')]:
+    ax.axhline(mae_main[b], color=col, ls=ls, lw=1, label=f'{b} ({mae_main[b]:.3f})')
+ax.set_xticks(x)
+ax.set_xticklabels(mae_models.index)
+ax.set_ylabel('MAE of CF (test months)')
+ax.legend(fontsize=8, loc='upper left')
+fig.tight_layout()
+best = mae_models.index[0]
+add_titles(fig, f'SOLAR: MAE vs actual CF, forecast T = {T_MAIN}',
+           f"Best scenario forecast: {best} (MAE {mae_main[best]:.3f}); Seasonal Naive {mae_main['Seasonal Naive']:.3f}")
+plt.show()
+```
+
+```{python}
+# =============================================================================
+# CELL 5.2 -- Monthly CF: history, actual test year and the scenario forecast of the best models
+# The N_BEST models with the lowest scenario MAE (T = T_MAIN) are drawn, best first;
+# the shaded band is the min-max over the historical years.
+# =============================================================================
+
+N_BEST = 3
+MODELS_PLOT = list(mae_models.index[:N_BEST])                  # mae_models is sorted in cell 5.1
+
+
+hist = df_solar.loc[df_solar['FY'].isin(TRAIN_FYS), 'target']
+actual = df_solar.loc[TEST_MONTHS, 'target']
+fig, ax = plt.subplots(figsize=(14, 5.5))
+ax.plot(month_start(hist.index), hist.values, color=GREY, lw=1.2, label='Actual CF, training FYs')
+ax.plot(month_start(actual.index), actual.values, color='black', lw=2.2, marker='o', ms=4, label='Actual CF, test FY')
+for i, m in enumerate(MODELS_PLOT):
+    sub = agg_all[(agg_all['t_source'] == T_MAIN) & (agg_all['method'] == m)].set_index('month').sort_index()
+    xm = month_start(sub.index)
+    ax.fill_between(xm, sub['lo'], sub['hi'], color=plt.cm.tab10(i), alpha=0.12, lw=0)
+    ax.plot(xm, sub['pred_median'], color=plt.cm.tab10(i), marker='o', ms=3, lw=1.6,
+            label=f"{m} (MAE {mae_main[m]:.3f})")
+ax.set_ylabel('Solar contract factor')
+ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
+ax.legend(fontsize=8, loc='upper right')
+fig.tight_layout()
+add_titles(fig, f'SOLAR monthly CF: scenario forecast of the {N_BEST} best models (T = {T_MAIN})',
+           f"Best: {MODELS_PLOT[0]} (MAE {mae_main[MODELS_PLOT[0]]:.3f}); median over the historical years; shaded = min-max range")
+plt.show()
+```

@@ -66,3 +66,5 @@
 /* Result slides: italic line under the title, MAE table on the right */
 .reveal .slides section p.sub { font-style: italic; font-size: 18px; margin: -4px 0 0 0; }
 .reveal .mae-box table.mae { width: 100%; font-size: 20px; margin: 0; }
+.reveal .subhead { font-size: 20px; font-weight: 700; color: var(--purple); }
+.reveal .box p { margin: 0 0 6px 0; }

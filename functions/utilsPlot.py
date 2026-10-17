@@ -25,9 +25,9 @@ ASSET_COLORS = ['#2171B5', '#D62728', '#7B3FA0', '#E6B800']    # one colour per 
 SEASON_STYLE = {1: ('Summer', '#C44E52', 'o'), 2: ('Autumn', '#DD8452', 's'),
                 3: ('Winter', '#4C72B0', 'D'), 4: ('Spring', '#55A868', '^')}
 
-# Feature importance bars: signed coefficient > 0 / < 0 (linear models), share of importance (tree models)
-IMPORTANCE_COLORS = {'Raises CF (linear models)': '#2ca02c', 'Lowers CF (linear models)': '#d62728',
-                     'Share of importance (tree models)': 'steelblue'}
+# Feature importance bars (theme colours): signed coefficient > 0 / < 0 (linear models), share of importance (tree models)
+IMPORTANCE_COLORS = {'Raises CF (linear models)': PURPLE, 'Lowers CF (linear models)': ORANGE,
+                     'Share of importance (tree models)': '#7D6B98'}
 
 # One colour per model (forecast plots of WindCF / SolarCF / CF_Forecast); baselines in grey
 MODEL_COLORS = {'Linear': '#4C72B0', 'Ridge': '#E67E22', 'RF': '#55A868', 'XGBoost': '#C44E52',
@@ -122,20 +122,25 @@ def annotated_heatmap(ax, table, cmap, vmin, vmax, fontsize=9, rotate_x=False):
     return im
 
 
-def importance_bars(ax, imp, signed):
+def importance_bars(ax, imp, signed, stars=None, fontsize=7):
     """Horizontal bars of a feature importance, largest at the top, with the value at the end of each bar.
 
-    Signed importances (linear models) are green when positive and red when negative; shares (tree models) are blue.
+    Signed importances (linear models) are purple when positive and orange when negative; shares (tree models) are
+    lilac (IMPORTANCE_COLORS). `stars` (feature -> '*', '**', ...) is written after the value.
     """
     imp = imp.reindex(imp.abs().sort_values().index)
     pos, neg, share = IMPORTANCE_COLORS.values()
     colors = [pos if v >= 0 else neg for v in imp.values] if signed else share
-    ax.barh(imp.index, imp.values, color=colors, alpha=0.85)
+    ax.set_axisbelow(True)                              # grid lines behind the bars
+    ax.barh(imp.index, imp.values, color=colors)
     ax.axvline(0, color='black', linewidth=0.6)
-    for y, v in enumerate(imp.values):
-        ax.annotate(f'{v:+.3f}' if signed else f'{v:.3f}', xy=(v, y), xytext=(3 if v >= 0 else -3, 0),
-                    textcoords='offset points', ha='left' if v >= 0 else 'right', va='center', fontsize=7)
-    ax.margins(x=0.2)                                   # room for the numbers at both ends
+    for y, (feat, v) in enumerate(imp.items()):
+        text = f'{v:+.3f}' if signed else f'{v:.3f}'
+        if stars is not None and stars.get(feat):
+            text = f'{text} {stars[feat]}' if v >= 0 else f'{stars[feat]} {text}'
+        ax.annotate(text, xy=(v, y), xytext=(3 if v >= 0 else -3, 0), textcoords='offset points',
+                    ha='left' if v >= 0 else 'right', va='center', fontsize=fontsize)
+    ax.margins(x=0.25)                                  # room for the numbers (and stars) at both ends
     ax.grid(axis='y', visible=False)
 
 

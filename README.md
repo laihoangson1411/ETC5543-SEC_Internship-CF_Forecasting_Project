@@ -44,6 +44,7 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   ├── SolarCF_Analysis.qmd
 │   └── CF_Forecast_FY27-29.qmd
 ├── images/                      # pictures used by the presentation
+├── scripts/clear_embed_cache.py  # pre-render step: the slides always embed outputs of the current code
 ├── css/presentation.css         # slide styles
 ├── report.qmd
 └── presentation.qmd
@@ -84,6 +85,7 @@ The settings shared by the notebooks (analysis window, train/test years, assets,
 
 - **Use the pinned versions.** The model results, XGBoost in particular, change between library versions even with the fixed seeds (`random_state = 42`).
 - **Render with Quarto.** `quarto render` runs each notebook from the top on a fresh kernel. Results read from cells run one by one in an editor can mix old and new code after an edit.
+- **Slides.** `presentation.qmd` embeds figures and tables from the analysis notebooks (`{{< embed >}}`). Quarto caches these outputs and would reuse them after a change in `functions/` only; the pre-render step `scripts/clear_embed_cache.py` clears that cache before every render.
 - **Do not use `--output-dir`** with `quarto render`: in a project it also removes the HTML files rendered next to the sources.
 - **Timestamps.** The generation file is time-starting; the 30-min price forecast is time-ending and is moved back 30 minutes when it is read (`utilsScenario.load_forecast_price_hh`).
 - Small differences (last decimals) between computers are expected in `QM_HistoricWeather_30min.csv` when it is rebuilt; they move the model errors only in the 4th-5th decimal.

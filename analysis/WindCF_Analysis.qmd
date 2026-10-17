@@ -18,7 +18,7 @@ title: "Wind contract factor: models and FY26 test"
 
 4. Forecast the test year with a forecast TWAP: LGC link, forecast rows, evaluation
 
-5. Forecast plots: every model in the test year with its MAE, MAE by model, feature importance of every model and monthly forecast of the two models compared
+5. Forecast plots: every model in the test year with its MAE, MAE by model, feature importance of every model and of the best models, monthly forecast of the best models
 
 **Next.** `CF_Forecast_FY27-29.qmd` retrains the models on FY23-26 and forecasts FY27-29.
 
@@ -71,7 +71,8 @@ from utilsScenario import (
     fit_depth_model,
     build_scenario_table,
 )
-from utilsModels import run_all_models, predict_method, predict_exponential, feature_importance, calculate_metrics
+from utilsModels import (run_all_models, predict_method, predict_exponential, feature_importance, ridge_pvalues,
+                         p_stars, calculate_metrics)
 
 cfg = make_cfg()
 np.random.seed(cfg["random_seed"])
@@ -383,17 +384,16 @@ plt.show()
 
 ### Feature importance
 
-Feature importance of the five weather-driven models, fitted on the training years. Linear and Ridge (top row) are coefficient-based, so the **sign** is meaningful (green = the feature raises CF, red = it lowers it): Linear = coefficient x feature standard deviation, Ridge = coefficient on standardised features. The tree models (bottom row: RF, XGBoost) give each feature a share of the importance (>= 0, summing to 1); the Ensemble is the mean of the RF and XGBoost shares. The baselines use no weather or price feature.
+Feature importance of the five weather-driven models, fitted on the training years. Linear and Ridge (top row) are coefficient-based, so the **sign** is meaningful (purple = the feature raises CF, orange = it lowers it): Linear = coefficient x feature standard deviation, Ridge = coefficient on standardised features. The tree models (bottom row: RF, XGBoost) give each feature a share of the importance (>= 0, summing to 1); the Ensemble is the mean of the RF and XGBoost shares. The baselines use no weather or price feature.
 
 ```{python}
 # =============================================================================
 # CELL 5.4 -- Feature importance of the five weather-driven models
 # utilsModels.feature_importance returns (importance, signed). Top row: linear models; bottom row: tree models.
-# MODELS_SHOW: the two models of the last plot, a tree model and a linear model (EDIT HERE).
 # =============================================================================
 from matplotlib.patches import Patch
 
-MODELS_SHOW = ['Ensemble', 'Ridge']
+['Ensemble', 'Ridge']
 
 train = df_wind[df_wind['FY'].isin(TRAIN_FYS)]
 importance = {m: feature_importance(fitted, m, train) for m in MODEL_ORDER}
@@ -412,35 +412,60 @@ add_titles(fig, 'WIND: feature importance of the weather-driven models',
 plt.show()
 ```
 
-### Monthly CF of the two models
+### Feature importance of the best models
 
-The last plot compares two models (`MODELS_SHOW`): the Ensemble (tree-based, the model used for the FY27-29 forecast) and Ridge (linear).
+The two models compared in the slides (`MODELS_SHOW`): the Ensemble (tree-based, the model used for the FY27-29 forecast; its importance is the mean of the RF and XGBoost shares) and Ridge (linear). The Ridge bars carry the significance of each coefficient, from an approximate t-test for ridge regression (Cule et al., 2011; `utilsModels.ridge_pvalues`): ridge has no exact p-value, so the stars are a guide, not a formal test.
 
 ```{python}
+#| label: wind-importance-best
 # =============================================================================
-# CELL 5.5 -- Monthly CF: history, actual test year and the scenario forecast of the two models of MODELS_SHOW
-# (set in cell 5.4: a tree model and a linear model); the shaded band is the min-max over the historical years.
+# CELL 5.5 -- Feature importance of MODELS_SHOW (EDIT HERE): a linear and a tree model, larger numbers for the slides
+# Ridge: * p < 0.05, ** p < 0.01, *** p < 0.001 (utilsModels.ridge_pvalues, utilsModels.p_stars).
+# =============================================================================
+
+MODELS_SHOW = ['Ensemble', 'Ridge']
+
+stars_ridge = ridge_pvalues(fitted, train).map(p_stars)
+fig, axes = plt.subplots(1, len(MODELS_SHOW), figsize=(16, 3.1))
+for ax, m in zip(axes, MODELS_SHOW):
+    importance_bars(ax, *importance[m], stars=stars_ridge if m == 'Ridge' else None, fontsize=11)
+    ax.set_title(m, fontsize=13, fontweight='bold')
+    ax.tick_params(labelsize=11)
+fig.tight_layout()
+if 'Ridge' in MODELS_SHOW:
+    x0 = axes[MODELS_SHOW.index('Ridge')].get_position().x0
+    fig.text(x0, -0.02, 'Ridge: * p < 0.05, ** p < 0.01, *** p < 0.001 (approximate t-test for ridge coefficients)',
+             fontsize=10, style='italic', ha='left', va='top')
+plt.show()
+```
+
+### Monthly CF of the best models
+
+```{python}
+#| label: wind-best-monthly
+# =============================================================================
+# CELL 5.6 -- Monthly CF: history, actual test year and the scenario forecast of MODELS_PLOT (the models of cell 5.5);
+# the shaded band is the min-max over the historical years.
 # =============================================================================
 
 MODELS_PLOT = MODELS_SHOW
 
 hist = df_wind.loc[df_wind['FY'].isin(TRAIN_FYS), 'target']
 actual = df_wind.loc[TEST_MONTHS, 'target']
-fig, ax = plt.subplots(figsize=(14, 5.5))
+fig, ax = plt.subplots(figsize=(12, 4.5))
 ax.plot(month_start(hist.index), hist.values, color=GREY, lw=1.2, label='Actual CF, training FYs')
 ax.plot(month_start(actual.index), actual.values, color='black', lw=2.2, marker='o', ms=4, label='Actual CF, test FY')
-for i, m in enumerate(MODELS_PLOT):
+for m in MODELS_PLOT:
     sub = agg_all[(agg_all['t_source'] == T_MAIN) & (agg_all['method'] == m)].set_index('month').sort_index()
     xm = month_start(sub.index)
-    ax.fill_between(xm, sub['lo'], sub['hi'], color=plt.cm.tab10(i), alpha=0.12, lw=0)
-    ax.plot(xm, sub['pred_median'], color=plt.cm.tab10(i), marker='o', ms=3, lw=1.6,
-            label=f"{m} (MAE {mae_main[m]:.3f})")
+    ax.fill_between(xm, sub['lo'], sub['hi'], color=MODEL_COLORS[m], alpha=0.15, lw=0)
+    ax.plot(xm, sub['pred_median'], color=MODEL_COLORS[m], marker='o', ms=3, lw=1.6, label=f"{m} (MAE {mae_main[m]:.3f})")
 ax.set_ylabel('Wind contract factor')
 ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
 fig.tight_layout()
-bottom_legend(fig)
-add_titles(fig, f"WIND monthly CF: scenario forecast of {' and '.join(MODELS_PLOT)} (T = {T_MAIN})",
-           'MAE ' + ', '.join(f'{m} {mae_main[m]:.3f}' for m in MODELS_PLOT) + '; median over the historical years; shaded = min-max range')
+bottom_legend(fig, ncol=len(MODELS_PLOT) + 2)
+add_titles(fig, f"WIND monthly CF: scenario forecast of {', '.join(MODELS_PLOT)} (T = {T_MAIN})",
+           'Median over the historical years; shaded = min-max range')
 plt.show()
 ```

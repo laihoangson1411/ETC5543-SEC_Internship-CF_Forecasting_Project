@@ -138,23 +138,23 @@ dictionary_table('data/dictionary/variables_wind.csv')
 
 <div class="bul" style="left: 36px; top: 59px; width: 1208px;"><b>The problem:</b> Our long-horizon forecast reuses the monthly price structure (negative TWAP, positive TWAP, negative share) of past years. FY23–24 had a certificate around \$50, so their negative prices were far deeper than FY27–29 will see (LGC ~\$8). Replaying that structure unchanged overstates the zero-dollar-floor benefit in CF.</div>
 
-<div class="bul" style="left: 36px; top: 108px;"><b>Step 1: Shrink the negative half-hours</b></div>
-::: {.abs .formula style="left: 76px; top: 132px;"}
+<div class="bul" style="left: 36px; top: 132px;"><b>Step 1: Shrink the negative half-hours</b></div>
+::: {.abs .formula style="left: 76px; top: 156px;"}
 $$P'_t = \begin{cases} s \cdot P_t & P_t < 0 \\ P_t & P_t \ge 0 \end{cases} \qquad s = \frac{a + b\,\text{LGC}_{\text{target}}}{a + b\,\text{LGC}_{\text{hist}}}, \qquad s \in [0, 1]$$
 :::
-<div class="abs" style="left: 69px; top: 202px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
+<div class="abs" style="left: 69px; top: 226px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
 
-<div class="bul" style="left: 36px; top: 280px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
-::: {.abs .formula style="left: 97px; top: 300px;"}
+<div class="bul" style="left: 36px; top: 304px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
+::: {.abs .formula style="left: 97px; top: 324px;"}
 $$P''_t = \begin{cases} P'_t & P_t < 0 \\ k \cdot P'_t & P_t \ge 0 \end{cases} \qquad k = \frac{\text{TWAP}_{\text{target}} - n_s\,\bar{P}'_{\text{neg}}}{(1 - n_s)\,\bar{P}_{\text{pos}}}$$
 :::
-<div class="abs" style="left: 94px; top: 374px;">Note that:</div>
-::: {.abs .formula style="left: 98px; top: 396px;"}
+<div class="abs" style="left: 94px; top: 398px;">Note that:</div>
+::: {.abs .formula style="left: 98px; top: 420px;"}
 $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 :::
 
-<div class="bul" style="left: 36px; top: 437px;"><b>Example:</b> replaying January 2023 into January 2028</div>
-::: {.abs style="left: 280px; top: 469px;"}
+<div class="bul" style="left: 36px; top: 461px;"><b>Example:</b> replaying January 2023 into January 2028</div>
+::: {.abs style="left: 280px; top: 493px;"}
 {{< embed analysis/EDA.qmd#replay-example >}}
 :::
 
@@ -186,13 +186,33 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 :::
 
 ::: {.abs style="left: 36px; top: 548px; width: 1208px;"}
--   Ensemble, XGBoost and Ridge are the most accurate (MAE 0.085–0.090), and the gap between them is small
+-   Ensemble, XGBoost and Ridge are the most accurate (MAE 0.085-0.090), and the gap between them is small
 -   All models beat both baselines but miss the October trough. Ridge reaches the December peak but over-predicts October-November.
 -   Choose best 3 models
 :::
 
 
 ## WIND CF Best models
+
+<div class="abs subhead" style="left: 36px; top: 64px;">Feature importance</div>
+
+::: {.abs .fig style="left: 36px; top: 96px; width: 1208px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-importance-best >}}
+:::
+
+<div class="abs subhead" style="left: 36px; top: 356px;">Test FY26</div>
+
+::: {.abs .fig style="left: 36px; top: 386px; width: 630px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-best-monthly >}}
+:::
+
+::: {.abs .box style="left: 690px; top: 420px; width: 554px;"}
+**Key takeaway:**
+
+-   Both models rely mostly on twap_neg and month_cos: deeper negative prices and summer months give a higher CF
+-   Weather inputs contribute much less than price
+-   Both models track the seasonal cycle of actual CF but miss month-specific swings.
+:::
 
 
 # Conclusion

@@ -10,6 +10,7 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.optimize import curve_fit
 from sklearn.linear_model import LinearRegression, RidgeCV
 from sklearn.preprocessing import StandardScaler
@@ -198,3 +199,25 @@ def feature_importance(fitted, method, train):
         return pd.Series(mdl.coef_, index=feats), True
     imp = pd.Series(mdl.feature_importances_, index=feats)
     return imp / imp.sum(), False
+
+
+def ridge_pvalues(fitted, train, target_col='target'):
+    """Approximate p-value of each Ridge coefficient (t-test for ridge regression, Cule et al. 2011).
+
+    Ridge has no exact p-value. On the standardised training features X (the scaler of run_ridge) with penalty alpha:
+    Var(beta) = sigma^2 A X'X A with A = (X'X + alpha I)^-1 and sigma^2 = RSS / (n - tr(H) - 1), H = X A X'.
+    """
+    m, feats = fitted['Ridge']['model'], fitted['Ridge']['feats']
+    d = train.dropna(subset=feats + [target_col])
+    X, y = m.scaler_.transform(d[feats].values), d[target_col].values
+    A = np.linalg.inv(X.T @ X + m.alpha_ * np.eye(X.shape[1]))
+    dof = len(y) - np.trace(X @ A @ X.T) - 1                 # - 1 for the intercept
+    resid = y - m.predict(X)
+    cov = (resid @ resid / dof) * A @ X.T @ X @ A
+    t = m.coef_ / np.sqrt(np.diag(cov))
+    return pd.Series(2 * stats.t.sf(np.abs(t), dof), index=feats)
+
+
+def p_stars(p):
+    """Significance stars: *** p < 0.001, ** p < 0.01, * p < 0.05, '' otherwise."""
+    return '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else ''

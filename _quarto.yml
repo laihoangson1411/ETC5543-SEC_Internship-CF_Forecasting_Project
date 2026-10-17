@@ -2,6 +2,7 @@
 # because each notebook reads the files written by the ones before it (see README.md).
 project:
   type: default
+  pre-render: scripts/clear_embed_cache.py     # rebuild the embedded notebook outputs from the current code
   render:
     - analysis/IDA_ContractFactors.qmd          # -> data/processed/HistoricContractFactors.csv
     - analysis/IDA_Weather_SolarIrradiance.qmd

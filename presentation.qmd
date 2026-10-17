@@ -240,21 +240,20 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 
 ## Calibrate data: Wind_speed_kph
 
-<div class="box" style="left: 36px; top: 125px; width: 596px; height: 152px;">
-<ul>
-<li>DTN wind speed data for stations 89002 &amp; 86338 suffered systematic amplitude compression from 7/10/2025 – 14/4/2026 (6 months, 8,448 half-hours)</li>
-<li>Critically, <b>temporal rank order is preserved</b>: Spearman correlation with actual generation barely changed (89002: 0.474 → 0.479; 86338: 0.316 → 0.368). This means the signal is recoverable.</li>
-</ul>
-</div>
+::: {.abs .box .qm-box style="left: 36px; top: 112px; width: 540px; min-height: 170px;"}
+-   DTN wind speed data for stations 89002 & 86338 suffered systematic amplitude compression from 7/10/2025 – 14/4/2026 (6 months, 9,120 half-hours)
+-   Critically, **temporal rank order is preserved**: Spearman correlation with actual generation barely changed (89002: 0.488 → 0.475; 86338: 0.337 → 0.356). This means the signal is recoverable.
+:::
 
-<div class="box" style="left: 36px; top: 451px; width: 596px; height: 152px;">
-<b>⇒ Correction method - Quantile Mapping (QM):</b> a standard technique in meteorology for bias-correcting climate data. Each corrupted value is mapped to the same percentile in the clean historical distribution, stratified by (month x half-hour of day) to respect seasonal and diurnal wind patterns. Reference period: Oct-Mar of FY23-25 (3 clean years)
-</div>
+::: {.abs .box .qm-box style="left: 36px; top: 440px; width: 540px; min-height: 170px;"}
+**⇒ Correction method - Quantile Mapping (QM):** a standard technique in meteorology for bias-correcting climate data. Each corrupted value is mapped to the same percentile in the clean historical distribution, stratified by (month x half-hour of day) to respect seasonal and diurnal wind patterns. Reference period: Oct-Apr of FY23-25 (3 clean years)
+:::
 
-::: {.abs .fig style="left: 648px; top: 42px; width: 569px;"}
+::: {.abs .fig style="left: 650px; top: 26px; width: 545px;"}
 {{< embed analysis/Wind_QuantileMapping.qmd#corruption-hist >}}
 :::
-::: {.abs .fig style="left: 656px; top: 372px; width: 561px;"}
+
+::: {.abs .fig style="left: 650px; top: 370px; width: 545px;"}
 {{< embed analysis/Wind_QuantileMapping.qmd#monthly-ws-after-qm >}}
 :::
 

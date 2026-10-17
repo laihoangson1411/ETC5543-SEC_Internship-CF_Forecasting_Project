@@ -70,3 +70,5 @@
 .reveal .mae-box table.mae { width: 100%; font-size: 20px; margin: 0; }
 .reveal .subhead { font-size: 20px; font-weight: 700; color: var(--purple); }
 .reveal .box p { margin: 0 0 6px 0; }
+.reveal .qm-box { font-size: 17px; text-align: justify; display: flex; flex-direction: column; justify-content: center; }
+.reveal .qm-box li, .reveal .qm-box p { text-align: justify; }

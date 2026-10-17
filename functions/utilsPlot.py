@@ -47,18 +47,19 @@ def set_style(small_fonts: bool = False, **rc):
     plt.rcParams.update({**BASE_RC, **(SMALL_FONTS_RC if small_fonts else {}), **rc})
 
 
-def add_titles(fig, title, subtitle=None):
+def add_titles(fig, title, subtitle=None, size=12):
     """Bold figure title with an optional one-line insight (subtitle) below it.
 
     Call after fig.tight_layout(); the text is placed just above the top of the figure.
+    `size` is the title font size (the subtitle is 2 points smaller); use a smaller size for a small figure.
     """
     def put(text, offset_pt, **kw):
         # figure-fraction x, y = top edge of the figure, then shifted up by offset_pt points
         shift = fig.transFigure + ScaledTranslation(0, offset_pt / 72, fig.dpi_scale_trans)
         fig.text(0.5, 1.0, text, transform=shift, ha='center', va='bottom', **kw)
-    put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
+    put(title, 8 + (16 if subtitle else 0), fontsize=size, fontweight='bold')
     if subtitle:
-        put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+        put(subtitle, 6, fontsize=size - 2, color='#555555', style='italic')
 
 
 def bottom_legend(fig, handles=None, labels=None, axes=None, ncol=None, **kw):

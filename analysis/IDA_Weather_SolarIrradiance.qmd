@@ -55,6 +55,7 @@ from utilsPlot import (
     CORR_CMAP,
     set_style,
     add_titles,
+    bottom_legend,
     table_title,
     annotated_heatmap,
 )
@@ -330,10 +331,8 @@ for ax, s in zip(axes, CORRUPT_STATIONS):
     ax2.grid(False)
     ax2.spines[['top']].set_visible(False)
 
-handles, labels = axes[0].get_legend_handles_labels()
-h2, l2 = ax2.get_legend_handles_labels()
-fig.tight_layout(rect=(0, 0.06, 1, 1))
-fig.legend(handles + h2, labels + l2, loc='lower center', ncol=2, frameon=False, fontsize=9)
+fig.tight_layout()
+bottom_legend(fig, ncol=2)
 gen_ratio = ratios[CORRUPT_STATIONS[0]][1]
 add_titles(fig, 'Fig 3.1 - Measured wind speed vs wind generation',
            ' and '.join(f'station {s} reads {ratios[s][0]:.0%}' for s in CORRUPT_STATIONS).capitalize()

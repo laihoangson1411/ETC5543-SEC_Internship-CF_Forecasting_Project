@@ -18,7 +18,7 @@ title: "Solar contract factor: models and FY26 test"
 
 4. Forecast the test year with a forecast TWAP: LGC link, forecast rows, evaluation
 
-5. Forecast plots: MAE by model, feature importance and monthly forecast of the two models compared
+5. Forecast plots: MAE by model, feature importance of every model and monthly forecast of the two models compared
 
 **Next.** `CF_Forecast_FY27-29.qmd` (part 4, Solar) retrains the models on FY23-26 and forecasts FY27-29.
 
@@ -54,7 +54,16 @@ ROOT = next(
 sys.path.insert(0, os.path.join(ROOT, "functions"))
 
 from utilsConfig import DATA_DIR, make_cfg
-from utilsPlot import PURPLE, GREY, set_style, add_titles, table_title, importance_bars
+from utilsPlot import (
+    PURPLE,
+    GREY,
+    IMPORTANCE_COLORS,
+    set_style,
+    add_titles,
+    bottom_legend,
+    table_title,
+    importance_bars,
+)
 from utilsData import (
     load_generation_inputs,
     load_weather_history,
@@ -69,7 +78,13 @@ from utilsScenario import (
     fit_depth_model,
     build_scenario_table,
 )
-from utilsModels import run_all_models, predict_method, predict_exponential, feature_importance, calculate_metrics
+from utilsModels import (
+    run_all_models,
+    predict_method,
+    predict_exponential,
+    feature_importance,
+    calculate_metrics,
+)
 
 cfg = make_cfg()
 np.random.seed(cfg["random_seed"])
@@ -313,8 +328,8 @@ for b, ls, col in [('Seasonal Naive', '--', 'blue'), ('Exponential', ':', 'red')
 ax.set_xticks(x)
 ax.set_xticklabels(mae_models.index)
 ax.set_ylabel('MAE of CF (test months)')
-ax.legend(fontsize=8, loc='upper left')
 fig.tight_layout()
+bottom_legend(fig, ncol=3)
 best = mae_models.index[0]
 add_titles(fig, f'SOLAR: MAE vs actual CF, forecast T = {T_MAIN}',
            f"Best scenario forecast: {best} (MAE {mae_main[best]:.3f}); Seasonal Naive {mae_main['Seasonal Naive']:.3f}")
@@ -323,41 +338,43 @@ plt.show()
 
 ### Feature importance
 
-Two models are looked at in detail in this plot and the last one: the best tree-based model and the Seasonal Naive baseline it has to beat (`MODELS_SHOW`). Linear and Ridge are coefficient-based, so the **sign** is meaningful (green = the feature raises CF, red = it lowers it): Linear = coefficient x feature standard deviation, Ridge = coefficient on standardised features. Tree models (RF, XGBoost) give each feature a share of the importance (>= 0, summing to 1); the Ensemble is the mean of the RF and XGBoost shares. The baselines use no weather or price feature.
+Feature importance of the five weather-driven models, fitted on the training years. Linear and Ridge (top row) are coefficient-based, so the **sign** is meaningful (green = the feature raises CF, red = it lowers it): Linear = coefficient x feature standard deviation, Ridge = coefficient on standardised features. The tree models (bottom row: RF, XGBoost) give each feature a share of the importance (>= 0, summing to 1); the Ensemble is the mean of the RF and XGBoost shares. The baselines use no weather or price feature.
 
 ```{python}
 # =============================================================================
-# CELL 5.2 -- Feature importance of the two models compared in this file
-# MODELS_SHOW: the models of this figure and of the last plot (EDIT HERE).
-# utilsModels.feature_importance returns (importance, signed), or None for a baseline (no features).
+# CELL 5.2 -- Feature importance of the five weather-driven models
+# utilsModels.feature_importance returns (importance, signed). Top row: linear models; bottom row: tree models.
+# MODELS_SHOW: the two models of the last plot, a tree model and a linear model (EDIT HERE).
 # =============================================================================
+from matplotlib.patches import Patch
 
-MODELS_SHOW = ['RF', 'Seasonal Naive']
+MODELS_SHOW = ['RF', 'Ridge']
 
 train = df_solar[df_solar['FY'].isin(TRAIN_FYS)]
-importance = {m: feature_importance(fitted, m, train) for m in MODELS_SHOW}
-with_features = [m for m in MODELS_SHOW if importance[m][0] is not None]
+importance = {m: feature_importance(fitted, m, train) for m in MODEL_ORDER}
 
-fig, axes = plt.subplots(1, len(with_features), figsize=(6.5 * len(with_features), 3.8), squeeze=False)
-for ax, m in zip(axes[0], with_features):
-    importance_bars(ax, *importance[m])
-    ax.set_title(f"{m} ({'signed coefficient' if importance[m][1] else 'share of importance'})", loc='left', fontsize=10)
+fig, axes = plt.subplots(2, 3, figsize=(16, 7))
+for row, models in zip(axes, [['Linear', 'Ridge'], ['RF', 'XGBoost', 'Ensemble']]):
+    for ax, m in zip(row, models):
+        importance_bars(ax, *importance[m])
+        ax.set_title(f"{m} ({'signed coefficient' if importance[m][1] else 'share of importance'})", loc='left', fontsize=10)
+    for ax in row[len(models):]:
+        ax.set_visible(False)
 fig.tight_layout()
-add_titles(fig, 'SOLAR: feature importance',
-           '; '.join(f'{m}: largest effect from {importance[m][0].abs().idxmax()}' for m in with_features))
+bottom_legend(fig, handles=[Patch(color=c, alpha=0.85, label=lab) for lab, c in IMPORTANCE_COLORS.items()], ncol=3)
+add_titles(fig, 'SOLAR: feature importance of the weather-driven models',
+           'Largest effect: ' + ', '.join(f'{m} {importance[m][0].abs().idxmax()}' for m in MODEL_ORDER))
 plt.show()
-
-for m in MODELS_SHOW:
-    if importance[m][0] is None:
-        print(f'{m} uses no features (baseline), so it has no feature importance.')
 ```
 
 ### Monthly CF of the two models
 
+The last plot compares two models (`MODELS_SHOW`): the RF (tree-based, the model used for the FY27-29 forecast) and Ridge (linear).
+
 ```{python}
 # =============================================================================
 # CELL 5.3 -- Monthly CF: history, actual test year and the scenario forecast of the two models of MODELS_SHOW
-# (set in cell 5.2); the shaded band is the min-max over the historical years.
+# (set in cell 5.2: a tree model and a linear model); the shaded band is the min-max over the historical years.
 # =============================================================================
 
 MODELS_PLOT = MODELS_SHOW
@@ -376,8 +393,8 @@ for i, m in enumerate(MODELS_PLOT):
 ax.set_ylabel('Solar contract factor')
 ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 4, 7, 10]))
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-ax.legend(fontsize=8, loc='upper right')
 fig.tight_layout()
+bottom_legend(fig)
 add_titles(fig, f"SOLAR monthly CF: scenario forecast of {' and '.join(MODELS_PLOT)} (T = {T_MAIN})",
            'MAE ' + ', '.join(f'{m} {mae_main[m]:.3f}' for m in MODELS_PLOT) + '; median over the historical years; shaded = min-max range')
 plt.show()

@@ -21,6 +21,10 @@ ASSET_COLORS = ['#2171B5', '#D62728', '#7B3FA0', '#E6B800']    # one colour per 
 SEASON_STYLE = {1: ('Summer', '#C44E52', 'o'), 2: ('Autumn', '#DD8452', 's'),
                 3: ('Winter', '#4C72B0', 'D'), 4: ('Spring', '#55A868', '^')}
 
+# Feature importance bars: signed coefficient > 0 / < 0 (linear models), share of importance (tree models)
+IMPORTANCE_COLORS = {'Raises CF (linear models)': '#2ca02c', 'Lowers CF (linear models)': '#d62728',
+                     'Share of importance (tree models)': 'steelblue'}
+
 # Correlation colour map: -1 = orange, 0 = white, +1 = purple
 CORR_CMAP = LinearSegmentedColormap.from_list('orange_purple', [ORANGE, 'white', PURPLE])
 
@@ -47,6 +51,32 @@ def add_titles(fig, title, subtitle=None):
     put(title, 8 + (16 if subtitle else 0), fontsize=12, fontweight='bold')
     if subtitle:
         put(subtitle, 6, fontsize=10, color='#555555', style='italic')
+
+
+def bottom_legend(fig, handles=None, labels=None, axes=None, ncol=None, **kw):
+    """One legend below the figure; call after fig.tight_layout(), like add_titles.
+
+    Without `handles`, it collects the labelled artists of `axes` (default: every axes of the figure, twin axes
+    included), shows each label once and removes the per-axes legends. With `axes`, the legend is centred under
+    those axes (one legend per panel when the panels have different labels); otherwise under the whole figure.
+    """
+    if handles is None:
+        handles, labels = [], []
+        for ax in (axes if axes is not None else fig.axes):
+            if ax.get_legend() is not None:
+                ax.get_legend().remove()
+            for h, lab in zip(*ax.get_legend_handles_labels()):
+                if lab not in labels:
+                    handles.append(h)
+                    labels.append(lab)
+    elif labels is None:
+        labels = [h.get_label() for h in handles]
+    x = 0.5
+    if axes is not None:
+        boxes = [ax.get_position() for ax in axes]
+        x = (min(b.x0 for b in boxes) + max(b.x1 for b in boxes)) / 2
+    kw = {'frameon': False, 'fontsize': 8, **kw}
+    return fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(x, 0), ncol=ncol or min(len(labels), 4), **kw)
 
 
 def table_title(title, note=None):
@@ -90,7 +120,8 @@ def importance_bars(ax, imp, signed):
     Signed importances (linear models) are green when positive and red when negative; shares (tree models) are blue.
     """
     imp = imp.reindex(imp.abs().sort_values().index)
-    colors = ['#2ca02c' if v >= 0 else '#d62728' for v in imp.values] if signed else 'steelblue'
+    pos, neg, share = IMPORTANCE_COLORS.values()
+    colors = [pos if v >= 0 else neg for v in imp.values] if signed else share
     ax.barh(imp.index, imp.values, color=colors, alpha=0.85)
     ax.axvline(0, color='black', linewidth=0.6)
     for y, v in enumerate(imp.values):

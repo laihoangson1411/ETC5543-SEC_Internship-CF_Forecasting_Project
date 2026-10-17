@@ -63,7 +63,7 @@ ROOT = next(
 sys.path.insert(0, os.path.join(ROOT, "functions"))
 
 from utilsConfig import DATA_DIR, make_cfg
-from utilsPlot import GREY, ORANGE, PURPLE, add_titles, table_title
+from utilsPlot import GREY, ORANGE, PURPLE, add_titles, bottom_legend, table_title
 from utilsData import load_generation_inputs, load_weather_history
 
 cfg = make_cfg()  # cfg['wind_csv'] is the raw DTN weather (not QM)
@@ -264,9 +264,9 @@ ax.plot(ws_monthly, '-o', color=PURPLE, ms=3, label='Mean wind stn 89002 (m/s)')
 ax.axvspan(CORRUPT_START, CORRUPT_END, color=GREY, alpha=0.15, label='Corruption period')
 ax2 = ax.twinx()
 ax2.plot(cf_wind_monthly, color=ORANGE, lw=1.6, label='Wind fleet capacity factor')
-ax.legend(loc='upper left'); ax2.legend(loc='upper right')
 ax.set_ylabel('Wind (m/s)'); ax2.set_ylabel('Capacity Factor')
 fig.tight_layout()
+bottom_legend(fig)
 add_titles(fig, 'Fig 2.1 - Monthly mean wind speed (station 89002) vs wind fleet capacity factor',
            'Measured wind drops sharply while generation stays normal → the weather data is wrong, not the weather')
 plt.show()
@@ -365,9 +365,9 @@ for ax, (mask, label, color) in zip(axes, [(ref, 'Same-season reference (FY23-25
                  f'sd={d["ws"].std():.2f}, n={len(d):,}', fontsize=9)
     ax.set_xlabel('Wind speed 89002 (m/s)')
     ax.set_xlim(0, 18)
-    ax.legend(fontsize=7)
 axes[0].set_ylabel('Wind fleet CF (half-hourly)')
 fig.tight_layout()
+bottom_legend(fig)
 add_titles(fig, 'Fig 3.1 - Wind speed vs wind fleet CF: reference vs corrupted period',
            'Check (1), monotonic? If the corrupted-period median still rises steadily, QM is feasible')
 plt.show()
@@ -483,7 +483,6 @@ axes[0].axhline(ref_daily_mean * 0.5, color=ORANGE, ls=':', label='50% mean thre
 if first_bad_day:
     axes[0].axvline(first_bad_day, color=ORANGE, lw=2, label=f'Corruption start: {first_bad_day.strftime("%d/%m")}')
 axes[0].set_ylabel('Wind speed (m/s)')
-axes[0].legend(fontsize=7, ncol=3)
 
 axes[1].plot(roll_sd.index, roll_sd.values, '-', color=PURPLE, lw=1.5, label='Rolling sd (24h)')
 axes[1].axhline(ref_daily_sd, color=GREY, ls='--', label=f'Reference sd = {ref_daily_sd:.1f}')
@@ -492,9 +491,9 @@ if first_bad_day:
     axes[1].axvline(first_bad_day, color=ORANGE, lw=2)
 axes[1].set_ylabel('Standard deviation (m/s)')
 axes[1].set_xlabel('Day')
-axes[1].legend(fontsize=7)
 
 fig.tight_layout()
+bottom_legend(fig)
 add_titles(fig, 'Fig 3.3 - Locating the corruption start day (October 2025, station 89002)',
            'Rolling 24h mean and sd fall sharply on the first corrupted day (orange line)')
 plt.show()
@@ -581,26 +580,23 @@ for i, stn in enumerate(QM_STATIONS):
                                (ws_fixed[bad].dropna(), 'QM-corrected', PURPLE)]:
         axes[0].hist(data, bins=60, alpha=0.35, density=True, color=color, label=label)
     axes[0].set_xlabel('Wind speed (m/s)'); axes[0].set_title('Distribution')
-    axes[0].legend(fontsize=7)
 
     # (ii) Oct-Nov 2025 time series: clear jump at 07/10
     ts_mask = (idx >= '2025-10-01') & (idx < '2025-11-15')
     axes[1].plot(ws[ts_mask], alpha=0.6, color=ORANGE, lw=0.5, label='Before QM')
     axes[1].plot(ws_fixed[ts_mask], alpha=0.8, color=PURPLE, lw=0.5, label='QM-corrected')
-    axes[1].axvline(CORRUPT_START, color=GREY, lw=2, ls='--', label='07/10')
+    axes[1].axvline(CORRUPT_START, color=GREY, lw=2, ls='--', label='Corruption start (07/10)')
     axes[1].set_title('Time series Oct-Nov 2025')
-    axes[1].legend(fontsize=7); axes[1].set_ylabel('m/s')
+    axes[1].set_ylabel('m/s')
 
     # (iii) Generation vs wind speed: QM-corrected points should overlap the reference cloud
-    axes[2].scatter(d_ref['ws'], d_ref['gen'], s=1, alpha=0.03, color=GREY, label='Reference')
+    axes[2].scatter(d_ref['ws'], d_ref['gen'], s=1, alpha=0.03, color=ORANGE, label='Reference')
     axes[2].scatter(d_fixed['ws'], d_fixed['gen'], s=1, alpha=0.05, color=PURPLE, label='QM-corrected')
     axes[2].set_xlabel('Wind speed (m/s)'); axes[2].set_ylabel('Wind generation (MWh)')
-    axes[2].set_title('Scatter after QM (purple) vs reference (grey)')
-    leg = axes[2].legend(fontsize=7, markerscale=10)
-    for h in getattr(leg, 'legend_handles', getattr(leg, 'legendHandles', [])):
-        h.set_alpha(1)                                          # the points are very faint; show them solid in the legend
+    axes[2].set_title('Scatter after QM (purple) vs reference (orange)')
 
     fig.tight_layout()
+    bottom_legend(fig, ncol=4)
     add_titles(fig, f'Fig 4.1{"ab"[i]} - Quantile mapping validation, station {stn}',
                'After QM, the distribution and the generation scatter should overlap the clean reference')
     plt.show()
@@ -676,7 +672,6 @@ for r_i, stn in enumerate(QM_STATIONS):
     ax.bar(x + 0.2, sd_after, 0.4, color=PURPLE, alpha=0.85, label='After QM')
     ax.scatter(x, sd_r, s=60, color='black', marker='D', zorder=5, label='Clean reference (FY23-25)')
     ax.set_ylabel('Monthly sd (m/s)')
-    ax.set_ylim(0, max(sd_before.max(), sd_after.max(), sd_r.max()) * 1.3)      # headroom for the legend
     ax.set_title(f'Station {stn}: monthly sd', loc='left', fontsize=10)
 
     # Right: distance to the reference
@@ -685,14 +680,13 @@ for r_i, stn in enumerate(QM_STATIONS):
     ax.plot(x, (sd_after - sd_r).abs(), 'o-', color=PURPLE, label='After QM')
     ax.axhline(0, color='black', lw=0.5)
     ax.set_ylabel('|monthly sd - reference sd| (m/s)')
-    ax.set_ylim(0, max((sd_before - sd_r).abs().max(), (sd_after - sd_r).abs().max()) * 1.3)   # headroom for the legend
     ax.set_title(f'Station {stn}: distance to the reference', loc='left', fontsize=10)
 
     for ax in axes[r_i]:
         ax.set_xticks(x); ax.set_xticklabels(check[stn].index)
-        ax.legend(loc='upper right', frameon=False, fontsize=8, ncol=3 if ax is axes[r_i, 0] else 1)
         ax.spines[['top', 'right']].set_visible(False)
 fig.tight_layout()
+bottom_legend(fig, ncol=3)
 add_titles(fig, 'Fig 5.1 - Wind speed spread vs the clean reference: before and after QM',
            f'Mean gap to the reference sd falls from {gap[89002][0]:.2f} to {gap[89002][1]:.2f} m/s (station 89002) and '
            f'from {gap[86338][0]:.2f} to {gap[86338][1]:.2f} m/s (station 86338)')
@@ -756,7 +750,6 @@ for r_i, stn in enumerate(QM_STATIONS):
         ax.set_ylabel('|monthly sd - true sd| (m/s)')
         ax.set_title(f'Station {stn}, {sim}\nMean error: squashed = {d["sd_err_squashed"].mean():.2f}, '
                      f'QM = {d["sd_err_qm"].mean():.2f} m/s', fontsize=9)
-        ax.legend(frameon=False, fontsize=8)
         ax.spines[['top', 'right']].set_visible(False)
 
 # Summary table: error before / after QM and recovery
@@ -771,6 +764,7 @@ val_summary = pd.DataFrame(rows).set_index(['station', 'metric'])
 rec = {(s, k): val_summary.loc[(s, l), 'Recovery (%)'] for s in QM_STATIONS for l, k in metrics}
 
 fig.tight_layout()
+bottom_legend(fig)
 add_titles(fig, 'Fig 5.2 - Simulation on clean winters: how close does QM get to the truth?',
            f'QM removes {rec[(89002, "sd_err")]:.0f}% / {rec[(86338, "sd_err")]:.0f}% of the monthly sd error '
            f'(stations 89002 / 86338)')
@@ -854,10 +848,11 @@ for ax, stn in zip(axes, QM_STATIONS):
     ax.plot(apr26_daily.index.day, apr26_daily['mean'].values, 'o-', color=ORANGE, ms=4, lw=1.2, label='Apr 2026')
     ax.set(xlabel='Day of April', ylabel='Daily mean wind speed (m/s)')
     ax.set_title(f'Station {stn}', loc='left', fontsize=10)
-    ax.legend(frameon=False, fontsize=8)
     ax.spines[['top', 'right']].set_visible(False)
 
 fig.tight_layout()
+for ax in axes:                                     # one legend per station (the reference mean differs)
+    bottom_legend(fig, axes=[ax], ncol=3)
 add_titles(fig, 'Fig 6.1 - April 2026 daily mean wind speed vs reference band',
            'Detecting where the corruption ends: the day the series returns to the reference band')
 plt.show()
@@ -989,7 +984,7 @@ for stn in QM_STATIONS:
           f'range=[{qm_section[ws_col].min():.1f}, {qm_section[ws_col].max():.1f}]')
 ```
 
-## 8. Summary
+## 8. Summarys
 
 ### 8.1 Corrected wind speed vs the clean reference
 
@@ -1060,9 +1055,8 @@ for ax, stn in zip(axes, QM_STATIONS):
 axes[1].tick_params(axis='x', rotation=30)
 
 # One legend for both panels (same labels), placed below the plots
-handles, labels = axes[0].get_legend_handles_labels()
-fig.tight_layout(rect=(0, 0.05, 1, 1))                      # keep a strip at the bottom for the legend
-leg = fig.legend(handles, labels, loc='lower center', ncol=3, frameon=False, fontsize=9)
+fig.tight_layout()
+leg = bottom_legend(fig, ncol=3, fontsize=9)
 for h in leg.legend_handles[:2]:                            # only the legend copies: thicker, solid lines (plots unchanged)
     h.set_linewidth(2)
     h.set_alpha(1)

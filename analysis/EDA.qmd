@@ -57,6 +57,7 @@ from utilsPlot import (
     CORR_CMAP,
     set_style,
     add_titles,
+    bottom_legend,
     table_title,
     fy_separators,
     annotated_heatmap,
@@ -297,8 +298,8 @@ for ax, tech in zip(axes, tables):
     ax.plot(pred.index, pred['exp_forecastT'], '--^', color='tab:orange', label='Exponential (forecast TWAP)')
     ax.set_title(f'{tech}: test year')
     ax.set_ylabel('Contract factor')
-    ax.legend(fontsize=8)
 fig.tight_layout()
+bottom_legend(fig, ncol=3)
 mae = exp_metrics.set_index(['tech', 'TWAP used'])['MAE']
 add_titles(fig, 'Exponential baseline: predicted vs actual CF in the test year',
            f"MAE at the forecast TWAP: wind {mae[('WIND', 'forecast TWAP')]:.3f}, solar {mae[('SOLAR', 'forecast TWAP')]:.3f}")
@@ -362,7 +363,7 @@ handles += [Line2D([], [], ls='', marker='o', mfc='0.5', mec='none', alpha=0.4, 
             Line2D([], [], ls='', marker='o', mfc='0.5', mec='black', mew=0.5, ms=5, label='Test (no. = month)'),
             Line2D([], [], color='0.5', lw=1, label='Exponential fit')]
 fig.tight_layout(rect=(0, 0, 1, 0.97))
-fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 0.0), ncol=4, frameon=False)
+bottom_legend(fig, handles=handles)
 add_titles(fig, f'CF vs TWAP: exponential fit (FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100}) and FY{TEST_FYS[0] % 100} test',
            f"Test-year MAE of the curves: wind {total_mae.get('WIND', np.nan):.3f}, solar {total_mae.get('SOLAR', np.nan):.3f}")
 plt.show()
@@ -394,8 +395,8 @@ ax.plot(lgc_plot.index, -lgc_plot, color=PURPLE, ls='--', lw=1, alpha=0.5, label
 ax.plot(twap_neg_monthly.index, twap_neg_monthly, color=ORANGE, lw=1.4, label='Negative TWAP')
 ax.axhline(0, color='0.6', lw=0.8, zorder=0)
 ax.set_ylabel('$/MWh')
-ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.22), ncol=3, frameon=False)
 fig.tight_layout()
+bottom_legend(fig, ncol=3)
 add_titles(fig, 'Monthly LGC price vs negative TWAP',
            f'LGC fell from \\${lgc_plot.iloc[0]:.0f} to \\${lgc_plot.iloc[-1]:.0f}/MWh over the analysis window')
 plt.show()
@@ -429,9 +430,8 @@ pivot_pct.T.plot(kind='bar', stacked=True, ax=ax, color=colors_bkt, width=0.6, l
 ax.set(ylabel='Share of half-hours (%)', xlabel='')
 ax.tick_params(axis='x', rotation=0)
 handles, labels = ax.get_legend_handles_labels()
-ax.legend(handles, [l.replace('$', '\\$') for l in labels],     # escape $ (matplotlib maths text)
-          loc='lower center', bbox_to_anchor=(0.5, -0.22), ncol=4, frameon=False)
 fig.tight_layout()
+bottom_legend(fig, handles, [l.replace('$', '\\$') for l in labels])     # escape $ (matplotlib maths text)
 add_titles(fig, 'Share of negative-price half-hours by severity and FY')
 plt.show()
 ```
@@ -481,8 +481,6 @@ ax_r.spines['right'].set_visible(True)
 ax_l.set_ylabel('$/MWh')
 ax_r.set_ylabel('LGC ($/MWh)')
 ax_l.set_title('Neg-price depth vs LGC over time')
-ax_l.legend(loc='upper left', fontsize=8)
-ax_r.legend(loc='upper right', fontsize=8)
 
 sc = axes[1].scatter(d_lgc['lgc'], d_lgc['depth'], c=d_lgc['season'], cmap='viridis', s=30)
 axes[1].set_xlabel('LGC ($/MWh)')
@@ -490,6 +488,7 @@ axes[1].set_ylabel('Neg-price depth ($/MWh)')
 axes[1].set_title('Depth vs LGC (colour = season)')
 fig.colorbar(sc, ax=axes[1], label='Season (0 = DJF)')
 fig.tight_layout()
+bottom_legend(fig, axes=[ax_l, ax_r])
 add_titles(fig, 'LGC vs negative-price depth',
            f'r raw = {depth_fit["r_raw"]:.2f}, within-season r = {depth_fit["r_within"]:.2f}; '
            f'depth = {a_lgc:.1f} + {b_lgc:.2f} x LGC')

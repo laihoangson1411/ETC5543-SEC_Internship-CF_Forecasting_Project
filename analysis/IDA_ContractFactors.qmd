@@ -46,6 +46,7 @@ from utilsPlot import (
     ORANGE,
     ASSET_COLORS,
     add_titles,
+    bottom_legend,
     table_title,
     fy_separators,
 )
@@ -187,9 +188,10 @@ def plot_asset_panels(series_of, ylabel):
             ax.plot(s, color=COLOR[a], lw=1.6, label=a)                              # solid, breaks at missing values
         ax.set_title(f'{gname} assets', loc='left', fontsize=10)
         ax.set_ylabel(ylabel)
-        ax.legend(loc='upper right', frameon=False, fontsize=8, ncol=len(assets))
         ax.spines[['top', 'right']].set_visible(False)
     fig.tight_layout()
+    for ax in axes:                                  # one legend under each panel (the colours repeat)
+        bottom_legend(fig, axes=[ax])
     return fig
 
 
@@ -401,14 +403,14 @@ def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start,
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
     ax.tick_params(axis='x', labelsize=8)
     ax.grid(axis='x', linestyle='--', alpha=0.3)
-    ax.legend(handles=[
+    fig.tight_layout()
+    bottom_legend(fig, handles=[
         Patch(facecolor='mediumseagreen', alpha=0.35, label='Available (online)'),
         Patch(facecolor='lightgrey', alpha=0.5, label='Not yet online / commissioning'),
         Patch(facecolor='red', alpha=0.8, edgecolor='black', linewidth=0.3, label='Exclusion > 90d'),
         Patch(facecolor='darkorange', alpha=0.7, edgecolor='black', linewidth=0.3, label='Exclusion 14-90d'),
         Patch(facecolor='gold', alpha=0.6, edgecolor='black', linewidth=0.3, label='Exclusion < 14d'),
-    ], loc='upper center', bbox_to_anchor=(0.5, -0.08), ncol=5, fontsize=8, frameon=False)
-    fig.tight_layout()
+    ], ncol=5)
     return fig
 
 
@@ -506,9 +508,8 @@ def plot_exclusion_share(tbl, wind_assets, solar_assets):
     ax.set_xlim(0, max(tbl[SHOW_CATS].sum(axis=1).max() * 1.15, 1))      # zoom to the excluded range
     ax.set_xlabel('% of online days')
     ax.grid(axis='x', linestyle='--', alpha=0.3)
-    ax.legend(handles=[Patch(facecolor=EXCL_COLOURS[c], label=c) for c in SHOW_CATS],
-              loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=3, fontsize=8, frameon=False)
     fig.tight_layout()
+    bottom_legend(fig, handles=[Patch(facecolor=EXCL_COLOURS[c], label=c) for c in SHOW_CATS], ncol=3)
     return fig
 
 

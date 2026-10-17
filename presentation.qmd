@@ -150,7 +150,7 @@ dictionary_table('data/dictionary/variables_wind.csv')
 ::: {.abs .formula style="left: 76px; top: 156px;"}
 $$P'_t = \begin{cases} s \cdot P_t & P_t < 0 \\ P_t & P_t \ge 0 \end{cases} \qquad s = \frac{a + b\,\text{LGC}_{\text{target}}}{a + b\,\text{LGC}_{\text{hist}}}, \qquad s \in [0, 1]$$
 :::
-<div class="abs" style="left: 69px; top: 226px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
+<div class="abs" style="left: 69px; top: 226px; font-size: 14px; line-height: 1.3;">depth = how deep a month's negatives go = −(5th percentile of price)<br><i>s</i> = predicted depth at the target LGC / predicted depth at the historical LGC<br><i>a</i> = depth that exists with no certificate at all (averaged over the year)<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
 
 <div class="bul" style="left: 36px; top: 304px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
 ::: {.abs .formula style="left: 97px; top: 324px;"}

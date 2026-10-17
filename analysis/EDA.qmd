@@ -481,7 +481,7 @@ where `a` is the non-LGC floor (thermal minimum generation, PPA bidding) and `b`
 # =============================================================================
 # CELL 4.4 -- Validate the LGC link
 # Fits depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist (utilsScenario.fit_depth_model).
-# `a_lgc` and `b_lgc` feed the shrink factor in the forecast files.
+# DEPTH = (a, b) feeds the shrink factor in the forecast files.
 #  MODE      'empirical' (recommended, keeps the non-LGC floor a) or 'lgc_ratio' (all depth is LGC-driven)
 #  DEPTH_Q   quantile used as the negative-price depth measure
 #  MIN_R     within-season correlation threshold to accept the adjustment
@@ -494,11 +494,12 @@ MIN_R = 0.5
 
 depth_fit = fit_depth_model(price_hh, lgc_m, DEPTH_Q)       # utilsScenario; also returns r_raw, r_within, data
 a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
+DEPTH = (a_lgc, b_lgc)                                      # (a, b), used by the shrink factor
 d_lgc = depth_fit['data']
 
 print(f'r raw = {depth_fit["r_raw"]:.3f} | r within-season = {depth_fit["r_within"]:.3f}')
-print(f'depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC  (season-controlled, {depth_fit["months"]} months)')
-print(f'Non-LGC floor: ${a_lgc:.1f}/MWh')
+print(f"depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC + {depth_fit['c1']:.2f} sin + {depth_fit['c2']:.2f} cos  ({depth_fit['months']} months)")
+print(f'Non-LGC floor: ${a_lgc:.1f}/MWh on average over the year (a + c1 sin + c2 cos in a given month)')
 if abs(depth_fit['r_within']) < MIN_R:
     print(f'WARNING: within-season r = {depth_fit["r_within"]:.2f} < {MIN_R}. Adjustment NOT warranted: note it as a qualitative risk only.')
 else:
@@ -532,7 +533,7 @@ plt.show()
 
 When a historical month is reused for a future month, its negative prices are multiplied by a **shrink factor** between 0 and 1:
 
-- `empirical`: ratio of the predicted depths, $(a + b\cdot LGC_{future}) / (a + b\cdot LGC_{hist})$. The non-LGC floor `a` stays.
+- `empirical`: ratio of the predicted depths, $(a + b\cdot LGC_{future}) / (a + b\cdot LGC_{hist})$. The non-LGC floor `a` (averaged over the year) stays. Adding the seasonal term $c_1 \sin + c_2 \cos$ of the month to both depths was tested and made the FY26 forecast of every model worse, so it is left out.
 - `lgc_ratio`: $LGC_{future} / LGC_{hist}$ (assumes all the depth is LGC-driven).
 
 If the historical and future LGC are the same, the factor is 1 (no change). If an LGC price is missing, the factor is 1 as well.
@@ -549,7 +550,7 @@ for m_h in [pd.Timestamp(f'{y}-07-01') for y in range(TRAIN_FYS[0] - 1, TEST_FYS
         if m_h in lgc_m.index and m_f in lgc_m.index:
             rows.append({'historical month': f'{m_h:%b %Y}', 'LGC hist': lgc_m[m_h],
                          'reused for': f'{m_f:%b %Y}', 'LGC future': lgc_m[m_f],
-                         'shrink factor': shrink_factor(m_h, m_f, lgc_m, MODE, (a_lgc, b_lgc))})
+                         'shrink factor': shrink_factor(m_h, m_f, lgc_m, MODE, DEPTH)})
 table_title('Table 4.2 - shrink factor of historical negative prices', f'mode = {MODE}; 1.0 = no change')
 display(pd.DataFrame(rows).round(3))
 ```
@@ -560,13 +561,13 @@ display(pd.DataFrame(rows).round(3))
 #| label: replay-example
 # =============================================================================
 # CELL 4.6 -- Example: one historical month replayed into a future month (utilsScenario.replay_example)
-# The same steps as the scenario forecast (build_scenario_features); the table is the one of the slides.
+# The same steps as the scenario forecast (adjust_month_prices, on the half-hours of the month); the table is the one of the slides.
 # =============================================================================
 
 M_HIST, M_FUTURE = pd.Timestamp('2023-01-31'), pd.Timestamp('2028-01-31')       # month-end labels, like df_wind
-ex = replay_example(df_wind, M_HIST, M_FUTURE, T_forecast[M_FUTURE],
+ex = replay_example(price_hh, M_HIST, M_FUTURE, T_forecast[M_FUTURE],
                     lgc_hist=lgc_m[M_HIST.to_period('M').to_timestamp()],
-                    lgc_future=load_lgc_forecast(cfg['lgc_fc_csv'])[M_FUTURE.year], mode=MODE, depth_ab=(a_lgc, b_lgc))
+                    lgc_future=load_lgc_forecast(cfg['lgc_fc_csv'])[M_FUTURE.year], mode=MODE, depth=DEPTH)
 
 
 def money(v):

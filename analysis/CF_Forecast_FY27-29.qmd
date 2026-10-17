@@ -10,7 +10,7 @@ title: "Contract factor forecast FY27-29"
 
 - `PriceForecast_Month.csv`: ASX adjusted monthly price, columns date, September and August. These are the two T sources used now, `ASX_Sep` and `ASX_Aug`.
 
-- `HistoricLGCPrice.csv` and `ForecastedLGCPrice.csv`: LGC price. 
+- `HistoricLGCPrice.csv` and `ForecastedLGCPrice.csv`: LGC price. A forecast month that has already passed uses the actual monthly LGC price (up to the last month of `HistoricLGCPrice.csv`, Sep 2026 when this was written); the later months use the forecast of their calendar year (`Cal 26` = 2026). The forecast is therefore made with the information available at that date, and it moves when the history file is updated. 
 
 - The historical CF, generation and weather come from the same files as in `WindCF_Analysis.qmd` and `SolarCF_Analysis.qmd`.
 
@@ -146,7 +146,7 @@ The T sources should be close to each other; a source that is far from the other
 #  USE_SOURCES    the T sources used (EDIT HERE): 'ASX_Sep', 'ASX_Aug' and 'forecast' (30-min price forecast, off for now)
 #  T_BY_SOURCE    forecast TWAP per month for each source in USE_SOURCES
 #  lgc_all        LGC price on a month-start index: history first, then ForecastedLGCPrice.csv
-#  depth model    depth = a + b*LGC + c1*sin + c2*cos (utilsScenario.fit_depth_model; a_lgc, b_lgc feed the shrink)
+#  depth model    depth = a + b*LGC + c1*sin + c2*cos (utilsScenario.fit_depth_model; DEPTH = (a, b) feeds the shrink)
 # =============================================================================
 
 FORECAST_FYS = [2027, 2028, 2029]
@@ -174,20 +174,24 @@ T_BY_SOURCE = {src: T_LOADERS[src]().reindex(future_months) for src in USE_SOURC
 for src, t in T_BY_SOURCE.items():
     assert t.notna().all(), f'T source {src} is missing months: {[m.strftime("%Y-%m") for m in t[t.isna()].index]}'
 
-# --- LGC: history before FY27; every forecast month uses the forecast of its calendar year (ForecastedLGCPrice.csv) ---
+# --- LGC: actual monthly price where it exists (HistoricLGCPrice.csv); the later months use the forecast of their
+#     calendar year (ForecastedLGCPrice.csv), not of their FY ---
 # The file has one row per calendar year: TENOR ('Cal 26') and MID POINT INDEX (the LGC price of that year).
 lgc_cal = load_lgc_forecast(cfg['lgc_fc_csv'])                # forecast LGC price by calendar year
 months_start = future_months.to_period('M').to_timestamp()
 lgc_fc = pd.Series(lgc_cal.reindex(months_start.year).values, index=months_start)
-lgc_all = lgc_fc.combine_first(lgc_m)                    # the forecast price wins for the forecast months
+lgc_all = lgc_m.combine_first(lgc_fc)                    # the actual price wins where it exists
+print(f'LGC: actual up to {lgc_m.index.max():%b %Y}, forecast (calendar year) from '
+      f'{(lgc_m.index.max() + pd.offsets.MonthBegin(1)):%b %Y}')
 
 lgc_future = pd.Series(lgc_all.reindex(months_start).values, index=future_months)
 assert lgc_future.notna().all(), f'LGC price missing for {[m.strftime("%Y-%m") for m in lgc_future[lgc_future.isna()].index]}'
 
 
 depth_fit = fit_depth_model(price_hh, lgc_m, DEPTH_Q)    # fitted on the history only
-a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
-print(f'Depth model: depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC  ({depth_fit["months"]} months)  |  MODE = {MODE}')
+DEPTH = (depth_fit['a'], depth_fit['b'])                 # (a, b): the shrink factor uses a + b x LGC
+print(f"Depth model: depth = {DEPTH[0]:.2f} + {DEPTH[1]:.3f} x LGC + {depth_fit['c1']:.2f} sin + {depth_fit['c2']:.2f} cos "
+      f"({depth_fit['months']} months)  |  MODE = {MODE}")
 
 # --- Table 2.1: average T and LGC by financial year ---
 fy_label = {fy: f'FY{fy % 100}' for fy in FORECAST_FYS}
@@ -268,7 +272,7 @@ def scenario_forecast(d, fitted):
     methods = [m for m in BASELINES + MODEL_ORDER if m in BASELINES or m == 'Ensemble' or fitted[m]['model'] is not None]
     frames = []
     for src, t in T_BY_SOURCE.items():
-        tbl = build_scenario_table(d, d['neg_share'], t, SCENARIO_FYS, lgc_all, MODE, (a_lgc, b_lgc),
+        tbl = build_scenario_table(d, price_hh, t, SCENARIO_FYS, lgc_all, MODE, DEPTH,
                                    versions=(('lgc_adj', True),))
         for method in methods:
             tmp = tbl[['_month', '_fy', '_T']].rename(columns={'_month': 'month', '_fy': 'scenario_fy', '_T': 'T'})

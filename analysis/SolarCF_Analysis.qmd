@@ -216,7 +216,7 @@ display(slide_table(check_tbl, digits=3))
 
 ### 4.1 LGC link and forecast functions
 
-The negative-price shrink uses the depth model `depth = a + b x LGC` of `EDA.qmd` (section 4.2), fitted again here on the same data so this file runs on its own.
+The negative-price shrink uses the depth model `depth = a + b x LGC + c1 sin + c2 cos` of `EDA.qmd` (section 4.2), fitted again here on the same data so this file runs on its own. The shrink factor is the ratio of the predicted depths a + b x LGC at the target and at the historical LGC; `a` is the floor averaged over the year (the seasonal term was tested in both depths and made the FY26 forecast worse, so it is left out).
 
 ```{python}
 # =============================================================================
@@ -231,8 +231,9 @@ MODE = 'empirical'      # shrink-factor mode: 'empirical' (keeps the non-LGC flo
 DEPTH_Q = 0.05          # quantile used as the negative-price depth measure
 
 depth_fit = fit_depth_model(price_hh, lgc_m, DEPTH_Q)
-a_lgc, b_lgc = depth_fit['a'], depth_fit['b']
-print(f'Depth model: depth = {a_lgc:.2f} + {b_lgc:.3f} x LGC  ({depth_fit["months"]} months)  |  MODE = {MODE}')
+DEPTH = (depth_fit['a'], depth_fit['b'])                 # (a, b): the shrink factor uses a + b x LGC
+print(f"Depth model: depth = {DEPTH[0]:.2f} + {DEPTH[1]:.3f} x LGC + {depth_fit['c1']:.2f} sin + {depth_fit['c2']:.2f} cos "
+      f"({depth_fit['months']} months)  |  MODE = {MODE}")
 
 SCENARIO_FYS = list(TRAIN_FYS)                           # historical years that supply GHI / price structure
 T_MAIN = 'forecast'                                       # T used in the main tables and plots
@@ -240,7 +241,7 @@ T_MAIN = 'forecast'                                       # T used in the main t
 
 def build_forecast_table(d, t_target):
     """One feature row per (test month, historical FY); meta columns _month, _fy, _actual, _T."""
-    return build_scenario_table(d, d['neg_share'], t_target, SCENARIO_FYS, lgc_m, MODE, (a_lgc, b_lgc),
+    return build_scenario_table(d, price_hh, t_target, SCENARIO_FYS, lgc_m, MODE, DEPTH,
                                 versions=(('lgc_adj', True),))
 
 

@@ -279,8 +279,45 @@ dictionary_table('data/dictionary/variables_solar.csv')
 
 ## Result for SOLAR CF - Overview
 
+<p class="sub">Training set: FY23-25, Test set: FY26. Model comparison using MAE</p>
 
-## Result for SOLAR CF - Best models
+::: {.abs .fig style="left: 36px; top: 100px; width: 745px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-test-models >}}
+:::
+
+::: {.abs .mae-box style="left: 840px; top: 118px; width: 404px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-mae-table >}}
+:::
+
+::: {.abs style="left: 36px; top: 548px; width: 1208px;"}
+-   RF, Ensemble and XGBoost are the most accurate (MAE 0.123-0.133) and the only models that beat the Seasonal Naive baseline (0.152)
+-   The linear models do not beat Seasonal Naive (Ridge 0.192, Linear 0.201): they predict an almost flat CF and miss the seasonal swings
+-   All models miss the November trough (actual CF 0.18) and the June peak (0.99).
+:::
+
+
+## Result for SOLAR CF - Best Tree vs Best Linear models
+
+<div class="abs subhead" style="left: 36px; top: 64px;">Feature importance</div>
+
+::: {.abs .fig style="left: 36px; top: 96px; width: 1208px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-importance-best >}}
+:::
+
+<div class="abs subhead" style="left: 36px; top: 356px;">Test FY26</div>
+
+::: {.abs .fig style="left: 36px; top: 386px; width: 630px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-best-monthly >}}
+:::
+
+::: {.abs .box style="left: 690px; top: 396px; width: 554px;"}
+**Key takeaway:**
+
+-   Both models rely mostly on twap_neg: deeper negative prices give a higher CF. It is the only significant Ridge coefficient (p < 0.001)
+-   ghi is the second input of RF (share 0.31) but not significant in Ridge (p = 0.16): its effect on CF is not a straight line
+-   RF follows the seasonal cycle of actual CF; Ridge stays almost flat (0.37-0.46) and misses the swings
+-   Ridge's band is wider than RF's (Sep-Dec) but stays flat around 0.4: it only catches the low CF of Sep-Oct, while RF's narrow band sits on the actual CF in Jul-Aug and Dec-Feb
+:::
 
 
 ## FY27-29 forecast of every model - WIND

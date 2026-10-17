@@ -409,7 +409,7 @@ plt.show()
 
 ### Feature importance of the best models
 
-The two models compared in the slides (`MODELS_SHOW`): Ridge (linear) and RF (tree-based, the model used for the FY27-29 forecast). The Ridge bars carry the significance of each coefficient, from an approximate t-test for ridge regression (Cule et al., 2011; `utilsModels.ridge_pvalues`): ridge has no exact p-value, so the stars are a guide, not a formal test.
+The two models compared in the slides (`MODELS_SHOW`): the RF (tree-based, the model used for the FY27-29 forecast) and Ridge (the best linear model). The Ridge bars carry the significance of each coefficient, from an approximate t-test for ridge regression (Cule et al., 2011; `utilsModels.ridge_pvalues`): ridge has no exact p-value, so the stars are a guide, not a formal test.
 
 ```{python}
 #| label: solar-importance-best
@@ -418,7 +418,7 @@ The two models compared in the slides (`MODELS_SHOW`): Ridge (linear) and RF (tr
 # Ridge: * p < 0.05, ** p < 0.01, *** p < 0.001 (utilsModels.ridge_pvalues, utilsModels.p_stars).
 # =============================================================================
 
-MODELS_SHOW = ['Ridge', 'RF']
+MODELS_SHOW = ['RF', 'Ridge']
 
 stars_ridge = ridge_pvalues(fitted, train).map(p_stars)
 fig, axes = plt.subplots(1, len(MODELS_SHOW), figsize=(16, 3.1))
@@ -439,11 +439,11 @@ plt.show()
 ```{python}
 #| label: solar-best-monthly
 # =============================================================================
-# CELL 5.6 -- Monthly CF: history, actual test year and the scenario forecast of MODELS_PLOT (EDIT HERE);
+# CELL 5.6 -- Monthly CF: history, actual test year and the scenario forecast of MODELS_PLOT (the models of cell 5.5);
 # the shaded band is the min-max over the historical years.
 # =============================================================================
 
-MODELS_PLOT = ['Ridge', 'RF']
+MODELS_PLOT = MODELS_SHOW
 
 hist = df_solar.loc[df_solar['FY'].isin(TRAIN_FYS), 'target']
 actual = df_solar.loc[TEST_MONTHS, 'target']

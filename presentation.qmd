@@ -32,8 +32,13 @@ format:
 
 **How Analytics defines and calculates CF for VRET wind and solar assets**
 
-<img src="images/formula_dwap.png" style="display: block; width: 494px; margin: 8px 0 6px 0;">
-<img src="images/formula_cf.png" style="display: block; width: 174px; margin: 0 0 12px 0;">
+::: {.formula style="margin: 8px 0 6px 0;"}
+$$\text{AssetDWAP} = \frac{\sum \big(\text{AssetOutput [MWh]} \times \max(\text{VIC1Price}, 0)\ [\$/\text{MWh}]\big)}{\sum \text{AssetOutput [MWh]}}$$
+:::
+
+::: {.formula style="margin: 0 0 12px 0;"}
+$$\text{AssetCF} = \frac{\text{AssetDWAP}}{\text{AssetTWAP}}$$
+:::
 
 -   DWAP: average price weighted by the asset's output, negative prices floored at \$0
 -   TWAP: average market price over the period
@@ -42,7 +47,9 @@ format:
 We use monthly CF throughout, because SEC calculates CF monthly, our price, LGC and weather inputs are monthly, and daily or weekly CF is much noisier.
 :::
 
-<img class="abs" src="images/monthly_CF.png" style="left: 651px; top: 81px; width: 593px;">
+::: {.abs .fig style="left: 651px; top: 81px; width: 593px;"}
+{{< embed analysis/EDA.qmd#monthly-cf >}}
+:::
 
 ## The recent CF forecasting model and its issues
 
@@ -59,7 +66,9 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 -   **Certificate price (LGC):** Historical negative prices were shaped by a certificate worth up to \$66. It is worth about \$8 today and the scheme ends in 2030, so the price structure has to be corrected before it can be used to forecast forward.
 :::
 
-<img class="abs" src="images/exponential.png" style="left: 668px; top: 47px; height: 603px;">
+::: {.abs .fig style="left: 668px; top: 47px; width: 490px;"}
+{{< embed analysis/EDA.qmd#cf-vs-twap >}}
+:::
 
 ## End-to-End Modelling Workflow
 
@@ -123,6 +132,79 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 <p class="foot">\(1\) Monthly mean TWAP includes both positives and negatives</p>
 
+## EDA after QM correcting
+
+::: {style="width: 509px; margin-top: 8px;"}
+-   For Wind, we kept the variables most correlated with WIND_CF (twap_neg −0.84, month_cos 0.81, rh −0.60, wind_speed_kph as the physical driver) and dropped redundant ones (twap, temp_c, dp_c) and uncorrelated ones (rainfall_mm).
+-   We then checked multicollinearity with VIF to confirm the final six inputs do not overlap.
+-   **Wind features: wind_speed_kph, twap_neg, twap_pos, rh, month_sin, month_cos**
+:::
+
+::: {.abs .fig style="left: 544px; top: 38px; width: 660px;"}
+{{< embed analysis/EDA.qmd#corr-wind >}}
+:::
+
+## Negative prices and the certificate that sets their floor
+
+-   FY26: **26%** of half-hours below \$0, up from **20%** in FY23, and **56%** of them sit in the shallow −\$10 to \$0 band
+-   Why: **Supply and demand decide when prices go negative. The certificate decides how deep.**
+-   LGC = one certificate per MWh of renewable generation; retailers are legally required to buy them; scheme ends 31 Dec 2030
+-   LGC fell from \~\$32 (FY25 avg) to \~\$6 by Jun 2026 (**−82%**), so the floor has lifted toward zero and negative prices are getting shallower
+
+::: {.abs .fig style="left: 36px; top: 245px; width: 589px;"}
+{{< embed analysis/EDA.qmd#negative-price-share >}}
+:::
+::: {.abs .fig style="left: 655px; top: 245px; width: 589px;"}
+{{< embed analysis/EDA.qmd#lgc-vs-neg-twap >}}
+:::
+
+## Adjusting replayed prices for a cheaper certificate
+
+<div class="bul" style="left: 36px; top: 59px; width: 1208px;"><b>The problem:</b> Our long-horizon forecast reuses the monthly price structure (negative TWAP, positive TWAP, negative share) of past years. FY23–24 had a certificate around \$50, so their negative prices were far deeper than FY27–29 will see (LGC ~\$8). Replaying that structure unchanged overstates the zero-dollar-floor benefit in CF.</div>
+
+<div class="bul" style="left: 36px; top: 108px;"><b>Step 1: Shrink the negative half-hours</b></div>
+::: {.abs .formula style="left: 76px; top: 132px;"}
+$$P'_t = \begin{cases} s \cdot P_t & P_t < 0 \\ P_t & P_t \ge 0 \end{cases} \qquad s = \frac{a + b\,\text{LGC}_{\text{target}}}{a + b\,\text{LGC}_{\text{hist}}}, \qquad s \in [0, 1]$$
+:::
+<div class="abs" style="left: 69px; top: 202px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
+
+<div class="bul" style="left: 36px; top: 280px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
+::: {.abs .formula style="left: 97px; top: 300px;"}
+$$P''_t = \begin{cases} P'_t & P_t < 0 \\ k \cdot P'_t & P_t \ge 0 \end{cases} \qquad k = \frac{\text{TWAP}_{\text{target}} - n_s\,\bar{P}'_{\text{neg}}}{(1 - n_s)\,\bar{P}_{\text{pos}}}$$
+:::
+<div class="abs" style="left: 94px; top: 374px;">Note that:</div>
+::: {.abs .formula style="left: 98px; top: 396px;"}
+$$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
+:::
+
+<div class="bul" style="left: 36px; top: 437px;"><b>Example:</b> replaying January 2023 into January 2028</div>
+<div class="abs" style="left: 280px; top: 469px;">
+<table class="dd ex">
+<tr><th></th><th>Historical</th><th>After adjustment</th></tr>
+<tr><td>LGC</td><td><b>\$52</b></td><td><b>\$8</b> (forecast)</td></tr>
+<tr><td>Negative half-hours (27% of month)</td><td>avg <b>-\$42.55</b></td><td>avg <b>-\$21.68</b> (s = 0.51)</td></tr>
+<tr><td>Positive half-hours</td><td>avg <b>\$80.96</b></td><td>avg <b>\$102.03</b> (k = 1.26)</td></tr>
+<tr><td>Monthly TWAP</td><td>\$48.09</td><td><b>\$69.11</b> ( = monthly forecasted price)</td></tr>
+</table>
+</div>
+
+## Forecasting Method
+
+
+## Model Summary
+
+
+## Result for WIND CF - Overview
+
+
+## Result for WIND CF - Best models
+
+
+## Summary + Limitation + Suggestion
+
+
+## Appendix
+
 ## Calibrate data: Wind_speed_kph
 
 <div class="box" style="left: 36px; top: 125px; width: 596px; height: 152px;">
@@ -136,49 +218,14 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 <b>⇒ Correction method - Quantile Mapping (QM):</b> a standard technique in meteorology for bias-correcting climate data. Each corrupted value is mapped to the same percentile in the clean historical distribution, stratified by (month x half-hour of day) to respect seasonal and diurnal wind patterns. Reference period: Oct-Mar of FY23-25 (3 clean years)
 </div>
 
-<img class="abs" src="images/wind_speed_corruption.png" style="left: 648px; top: 42px; width: 569px;">
-<img class="abs" src="images/wind_speed_after_qm.png" style="left: 656px; top: 372px; width: 561px;">
-
-## EDA after QM correcting
-
-::: {style="width: 509px; margin-top: 8px;"}
--   For Wind, we kept the variables most correlated with WIND_CF (twap_neg −0.84, month_cos 0.81, rh −0.60, wind_speed_kph as the physical driver) and dropped redundant ones (twap, temp_c, dp_c) and uncorrelated ones (rainfall_mm).
--   We then checked multicollinearity with VIF to confirm the final six inputs do not overlap.
--   **Wind features: wind_speed_kph, twap_neg, twap_pos, rh, month_sin, month_cos**
+::: {.abs .fig style="left: 648px; top: 42px; width: 569px;"}
+{{< embed analysis/Wind_QuantileMapping.qmd#corruption-hist >}}
+:::
+::: {.abs .fig style="left: 656px; top: 372px; width: 561px;"}
+{{< embed analysis/Wind_QuantileMapping.qmd#monthly-ws-after-qm >}}
 :::
 
-<img class="abs" src="images/wind_correlation.png" style="left: 544px; top: 38px; height: 602px;">
+## Result for SOLAR CF - Overview
 
-## Negative prices and the certificate that sets their floor
 
--   FY26: **26%** of half-hours below \$0, up from **20%** in FY23, and **56%** of them sit in the shallow −\$10 to \$0 band
--   Why: **Supply and demand decide when prices go negative. The certificate decides how deep.**
--   LGC = one certificate per MWh of renewable generation; retailers are legally required to buy them; scheme ends 31 Dec 2030
--   LGC fell from \~\$32 (FY25 avg) to \~\$6 by Jun 2026 (**−82%**), so the floor has lifted toward zero and negative prices are getting shallower
-
-<img class="abs" src="images/negative_price_share.png" style="left: 36px; top: 245px; width: 589px;">
-<img class="abs" src="images/lgc_price_vs_neg_twap.png" style="left: 655px; top: 245px; width: 589px;">
-
-## Adjusting replayed prices for a cheaper certificate
-
-<div class="bul" style="left: 36px; top: 59px; width: 1208px;"><b>The problem:</b> Our long-horizon forecast reuses the monthly price structure (negative TWAP, positive TWAP, negative share) of past years. FY23–24 had a certificate around \$50, so their negative prices were far deeper than FY27–29 will see (LGC ~\$8). Replaying that structure unchanged overstates the zero-dollar-floor benefit in CF.</div>
-
-<div class="bul" style="left: 36px; top: 108px;"><b>Step 1: Shrink the negative half-hours</b></div>
-<img class="abs" src="images/formula_step1.png" style="left: 76px; top: 144px; width: 485px;">
-<div class="abs" style="left: 69px; top: 202px; font-size: 14px; line-height: 1.3;"><i>s</i> = how deep a month's negatives go = −(5th percentile of price)<br><i>a</i> = depth that exists with no certificate at all<br><i>b</i> = extra dollars of depth per dollar of certificate</div>
-
-<div class="bul" style="left: 36px; top: 280px;"><b>Step 2: Rescale the positive half-hours so the month still matches the forecasted price</b></div>
-<img class="abs" src="images/formula_step2.png" style="left: 97px; top: 310px; width: 438px;">
-<div class="abs" style="left: 94px; top: 374px;">Note that:</div>
-<img class="abs" src="images/formula_twap.png" style="left: 98px; top: 393px; width: 260px;">
-
-<div class="bul" style="left: 36px; top: 437px;"><b>Example:</b> replaying January 2023 into January 2028</div>
-<div class="abs" style="left: 280px; top: 469px;">
-<table class="dd ex">
-<tr><th></th><th>Historical</th><th>After adjustment</th></tr>
-<tr><td>LGC</td><td><b>\$52</b></td><td><b>\$8</b> (forecast)</td></tr>
-<tr><td>Negative half-hours (27% of month)</td><td>avg <b>-\$42.55</b></td><td>avg <b>-\$21.68</b> (s = 0.51)</td></tr>
-<tr><td>Positive half-hours</td><td>avg <b>\$80.96</b></td><td>avg <b>\$102.03</b> (k = 1.26)</td></tr>
-<tr><td>Monthly TWAP</td><td>\$48.09</td><td><b>\$69.11</b> ( = monthly forecasted price)</td></tr>
-</table>
-</div>
+## Result for SOLAR CF - Best models

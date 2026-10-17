@@ -50,3 +50,11 @@
 .reveal table.ex { width: 719px; font-size: 15px; }
 .reveal table.ex td { padding: 7px 10px; }
 .reveal table.ex th { padding: 4px 10px; }
+
+/* Figures embedded from the analysis notebooks ({{< embed >}}): the plot fills the width of its .abs box */
+.reveal .fig img { width: 100%; height: auto; max-width: none; max-height: none; margin: 0; }
+.reveal .fig p, .reveal .fig figure, .reveal .fig .cell-output-display { margin: 0; }
+/* Formulas (MathJax 2, loaded by reveal.js): purple like the text, left-aligned, no extra space around them */
+.reveal .formula { font-size: 15px; color: var(--purple); }
+.reveal .formula .MathJax_Display { text-align: left !important; margin: 0 !important; }
+.reveal .formula p { margin: 0; }

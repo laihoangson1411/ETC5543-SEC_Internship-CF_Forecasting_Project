@@ -49,6 +49,7 @@ import os, sys, warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from IPython.display import display
 
 warnings.filterwarnings("ignore")
@@ -108,6 +109,7 @@ MARCH_END = pd.Timestamp('2026-03-31 23:30')                    # end of the Oct
 bad = (idx >= CORRUPT_START) & (idx <= MARCH_END)               # corrupted Oct-Mar half-hours (sections 2-5)
 ref = (idx < REF_END) & idx.month.isin(WINTER)                  # same Oct-Mar months, clean years
 bad_full = (idx >= CORRUPT_START) & (idx <= CORRUPT_END)        # whole corrupted window, incl. 1-14 April
+ref_oct_apr = (idx < REF_END) & idx.month.isin(WINTER + [4])   # clean Oct-Apr months, compared with bad_full
 ws_A = hh['ws_89002']                                           # main station of the checks in sections 2-3
 gen_wind = hh['gen_wind']
 
@@ -327,6 +329,39 @@ if sp_89002 < 0.35:
 else:
     print(f'Spearman (89002) in the corrupted period = {sp_89002:.2f}: rank information partially '
           'preserved -> QM may recover the signal, worth trying before excluding.')
+```
+
+### 2.3 Distribution of wind speed: reference vs corrupted period
+
+The same comparison as a picture, over the whole corrupted window (7 Oct 2025 - 14 Apr 2026) against the clean Oct-Apr months of FY23-25. The corrupted values are squeezed into a narrow, low range (sd), while their order still follows generation (Spearman, written in each panel).
+
+```{python}
+#| label: corruption-hist
+# =============================================================================
+# CELL 2.3 -- Wind speed distribution, same-season reference vs corrupted window (stations 89002 and 86338)
+# Reference: clean Oct-Apr months of FY23-25; corrupted: the whole window bad_full (7 Oct 2025 - 14 Apr 2026).
+# The sd and the Spearman correlation with generation use diag() of cell 2.2.
+# =============================================================================
+
+fig, axes = plt.subplots(len(QM_STATIONS), 1, figsize=(7, 3.2))
+for ax, stn in zip(axes, QM_STATIONS):
+    ws = hh[f'ws_{stn}']
+    x_max = np.ceil(ws[ref_oct_apr].quantile(0.999))
+    bins = np.linspace(0, x_max, 61)
+    ax.hist(ws[ref_oct_apr].dropna(), bins=bins, density=True, color=PURPLE, alpha=0.3, label='Same-season reference')
+    ax.hist(ws[bad_full].dropna(), bins=bins, density=True, color=ORANGE, alpha=0.6, label='Corrupted period')
+    r, b = diag(ws, gen_wind, ref_oct_apr), diag(ws, gen_wind, bad_full)
+    ax.text(0.99, 0.95, f"sd: {r['sd']:.2f} → {b['sd']:.2f} m/s\nSpearman: {r['spearman']:.3f} → {b['spearman']:.3f}",
+            transform=ax.transAxes, ha='right', va='top', fontsize=8)
+    ax.set_title(f'Station {stn}', fontsize=10)
+    ax.set_xlim(0, x_max)
+    ax.set_xlabel('Wind speed (m/s)')
+    ax.grid(False)
+fig.supylabel('Density', fontsize=9)
+fig.tight_layout()
+bottom_legend(fig, ncol=2)
+add_titles(fig, f'Wind speed corruption ({CORRUPT_START:%-d %b %Y} - {CORRUPT_END:%-d %b %Y})')
+plt.show()
 ```
 
 ## 3. Is QM feasible?
@@ -998,8 +1033,6 @@ The distribution of the QM-corrected wind speed (7 Oct 2025 - 14 Apr 2026) again
 # Table: how close the corrected distribution is to the clean reference.
 # =============================================================================
 
-ref_oct_apr = (idx < REF_END) & idx.month.isin(WINTER + [4])       # clean Oct-Apr months of FY23-25
-
 ws_data = {stn: {'ref': hh[f'ws_{stn}'][ref_oct_apr].dropna(),
                  'bad': hh[f'ws_{stn}'][bad_full].dropna(),
                  'qm':  hh[f'ws_{stn}_qm'][bad_full].dropna()} for stn in QM_STATIONS}
@@ -1062,5 +1095,36 @@ for h in leg.legend_handles[:2]:                            # only the legend co
     h.set_alpha(1)
 add_titles(fig, 'Fig 8.2 - Full dataset Jul 2022 - Jun 2026: original vs QM-corrected',
            'Daily mean wind speed, corruption window shaded')
+plt.show()
+```
+
+### 8.3 Monthly mean wind speed after the correction
+
+The monthly view of 8.2: the corrected series (purple) continues the seasonal pattern of the clean years, while the original data (dashed orange) drops in the corruption window.
+
+```{python}
+#| label: monthly-ws-after-qm
+# =============================================================================
+# CELL 8.3 -- Monthly mean wind speed: original (only around the corruption window) vs QM-corrected
+# =============================================================================
+
+fig, axes = plt.subplots(len(QM_STATIONS), 1, figsize=(7, 3.2), sharex=True)
+near_window = slice(CORRUPT_START - pd.DateOffset(months=2), CORRUPT_END + pd.DateOffset(months=1))
+for ax, stn in zip(axes, QM_STATIONS):
+    ws_prod = hh[f'ws_{stn}'].copy()
+    ws_prod[bad_full] = hh[f'ws_{stn}_qm'][bad_full]
+    orig_m = hh[f'ws_{stn}'].resample('MS').mean()
+    prod_m = ws_prod.resample('MS').mean()
+    ax.plot(orig_m.loc[near_window], color=ORANGE, lw=1, ls='--', label='Corrupted (original)')
+    ax.plot(prod_m, color=PURPLE, lw=1, label='After QM correction')
+    ax.set_title(f'Station {stn}', fontsize=10)
+    ax.set_ylim(0, None)
+    ax.grid(False)
+axes[-1].xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
+axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%b %y'))
+fig.supylabel('Monthly mean wind speed (m/s)', fontsize=9)
+fig.tight_layout()
+bottom_legend(fig, ncol=2)
+add_titles(fig, 'Monthly average wind speed after QM calibration')
 plt.show()
 ```

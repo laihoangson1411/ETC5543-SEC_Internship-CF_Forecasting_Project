@@ -100,7 +100,10 @@ print(
 )
 
 lgc_m = load_lgc_monthly(cfg["lgc_csv"])  # monthly LGC price, month-start index
-print(f"LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}")
+print(
+    f"LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m} ({len(lgc_m)} months), "
+    f"range ${lgc_m.min():.2f} - ${lgc_m.max():.2f}, latest ${lgc_m.iloc[-1]:.2f} ({lgc_m.index[-1]:%b %Y})"
+)
 
 print(
     f"Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols"
@@ -154,6 +157,7 @@ display(df_solar.tail(3).round(3))
 ### Monthly CF
 
 ```{python}
+#| label: monthly-cf
 # =============================================================================
 # CELL 2.1 -- Monthly contract factor, WIND and SOLAR
 # Monthly fleet CF over the analysis window. The dashed line at 1.0 is CF = 1 (DWAP = TWAP);
@@ -182,8 +186,9 @@ plt.show()
 The correlations use the **training years only**, so the test year does not influence the choice of features. Both heatmaps use the same colour scale (-1 to 1), so wind and solar are directly comparable.
 
 ```{python}
+#| label: corr-wind
 # =============================================================================
-# CELL 2.2 -- Correlation heatmaps (WIND and SOLAR)
+# CELL 2.2 -- Correlation heatmaps: helpers and the WIND heatmap (the SOLAR heatmap is in cell 2.3)
 # Annotated, square correlation matrices of the monthly features (training FYs only).
 # The target is shown as WIND_CF / SOLAR_CF.
 # =============================================================================
@@ -237,15 +242,27 @@ def plot_corr_heatmap(corr: pd.DataFrame, cmap=CORR_CMAP, side: float = 6.0):
     return fig
 
 
-corr_wind = correlation_matrix(df_wind, HEATMAP_COLS['WIND'], 'WIND_CF')
-corr_solar = correlation_matrix(df_solar, HEATMAP_COLS['SOLAR'], 'SOLAR_CF')
-
-for name, corr, t in [('WIND', corr_wind, 'WIND_CF'), ('SOLAR', corr_solar, 'SOLAR_CF')]:
+def show_corr_heatmap(name: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Correlation matrix of one technology ('WIND' or 'SOLAR'), drawn as a heatmap; returns the matrix."""
+    t = f'{name}_CF'
+    corr = correlation_matrix(df, HEATMAP_COLS[name], t)
     top = corr[t].drop(t).abs().idxmax()
     fig = plot_corr_heatmap(corr)
     add_titles(fig, f'{name}: correlation of monthly features (train FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100})',
                f'Strongest link with {t}: {top} (r = {corr.loc[top, t]:.2f})')
     plt.show()
+    return corr
+
+
+corr_wind = show_corr_heatmap('WIND', df_wind)
+```
+
+```{python}
+# =============================================================================
+# CELL 2.3 -- SOLAR correlation heatmap
+# =============================================================================
+
+corr_solar = show_corr_heatmap('SOLAR', df_solar)
 ```
 
 ## 3. Exponential baseline
@@ -307,6 +324,7 @@ plt.show()
 ```
 
 ```{python}
+#| label: cf-vs-twap
 # =============================================================================
 # CELL 3.2 -- TWAP vs CF with the exponential curves
 # Calibration months (training FYs): faded markers, the data used to fit the curves.
@@ -376,15 +394,12 @@ plt.show()
 If the LGC drives how deep prices go below zero, the negative TWAP should move with the LGC (and with its mirror image, -LGC).
 
 ```{python}
+#| label: lgc-vs-neg-twap
 # =============================================================================
 # CELL 4.1 -- LGC price series
 # Monthly LGC price next to the monthly negative TWAP; the dashed line is -LGC (the level renewables
 # would bid down to if the certificate were their only revenue).
 # =============================================================================
-
-print(f'LGC series: {lgc_m.index.min().date()} to {lgc_m.index.max().date()} ({len(lgc_m)} months)')
-print(f'LGC range: ${lgc_m.min():.2f} - ${lgc_m.max():.2f}')
-print(f'Latest LGC: ${lgc_m.iloc[-1]:.2f} ({lgc_m.index[-1]:%b %Y})')
 
 lgc_plot = lgc_m.loc[cfg['analysis_start'][:7]:cfg['analysis_end'][:7]]
 twap_neg_monthly = df_wind['twap_neg'].dropna()
@@ -404,7 +419,7 @@ plt.show()
 
 ```{python}
 # =============================================================================
-# CELL 4.2 -- Share of negative-price half-hours by severity and FY
+# CELL 4.2 -- Share of negative-price half-hours by severity and FY (table; the figure is in cell 4.3)
 # Four severity buckets: $-10 to $0, $-50 to $-10, $-100 to $-50 and below $-100.
 # =============================================================================
 
@@ -422,6 +437,13 @@ pivot_pct = pivot_cnt / total_hh * 100
 
 table_title('Table 4.1 - share of all half-hours by negative-price bucket (%)')
 display(pivot_pct.round(2))
+```
+
+```{python}
+#| label: negative-price-share
+# =============================================================================
+# CELL 4.3 -- Share of negative-price half-hours by severity and FY (figure)
+# =============================================================================
 
 colors_bkt = mpl.colors.LinearSegmentedColormap.from_list('purple', ['#cbbbe0', PURPLE])(np.linspace(0, 1, 4))
 
@@ -446,7 +468,7 @@ where `a` is the non-LGC floor (thermal minimum generation, PPA bidding) and `b`
 
 ```{python}
 # =============================================================================
-# CELL 4.3 -- Validate the LGC link
+# CELL 4.4 -- Validate the LGC link
 # Fits depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist (utilsScenario.fit_depth_model).
 # `a_lgc` and `b_lgc` feed the shrink factor in the forecast files.
 #  MODE      'empirical' (recommended, keeps the non-LGC floor a) or 'lgc_ratio' (all depth is LGC-driven)
@@ -506,7 +528,7 @@ If the historical and future LGC are the same, the factor is 1 (no change). If a
 
 ```{python}
 # =============================================================================
-# CELL 4.4 -- Shrink factor (examples)
+# CELL 4.5 -- Shrink factor (examples)
 # utilsScenario.shrink_factor for a few historical months reused for the first month of each later FY.
 # =============================================================================
 

@@ -16,7 +16,7 @@ format:
     slide-number: true
     embed-resources: true
     title-slide-attributes:
-      data-background-image: images/title_background.png
+      data-background-image: images/title_background.jpg
       data-background-size: cover
     css: css/presentation.css         # colours, layout helpers, data-dictionary tables
 execute:
@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.join(os.getcwd(), "functions"))
 from utilsPlot import dictionary_table
 ```
 
-# Background
+# Background {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">What the contract factor is, how the current TWAP-based model forecasts it and where it falls short, and our end-to-end workflow.</p>
 
 ## What is Contract Factor?
 
@@ -86,7 +88,9 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 <div class="center-fig"><img src="images/Workflow.png" alt="End-to-end modelling workflow"></div>
 
-# Data
+# Data {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">The seven VRET assets and three weather stations we use, and the candidate variables for the wind CF model.</p>
 
 ## Assets & Stations
 
@@ -104,7 +108,9 @@ dictionary_table('data/dictionary/variables_wind.csv')
 
 <p class="foot">\(1\) Monthly mean TWAP includes both positives and negatives</p>
 
-# Feature selection
+# Feature selection {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">Which variables enter the wind model, chosen from their correlation with CF and checked for multicollinearity.</p>
 
 ## Feature selection - WIND Model
 
@@ -118,7 +124,9 @@ dictionary_table('data/dictionary/variables_wind.csv')
 {{< embed analysis/EDA.qmd#corr-wind >}}
 :::
 
-# Price structure & LGC
+# Price structure & LGC {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">Why negative prices raise CF, and how replayed historical prices are adjusted for a cheaper certificate (LGC).</p>
 
 ## Negative prices and the certificate that sets their floor
 
@@ -158,7 +166,9 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 {{< embed analysis/EDA.qmd#replay-example >}}
 :::
 
-# Modelling & forecasting
+# Modelling & forecasting {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">How the FY27-29 scenario forecast is built, and the baselines and models we compare.</p>
 
 ## Forecasting Method
 
@@ -170,7 +180,9 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd models')
 ```
 
-# Results
+# Results {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">Every model tested on FY26 against the actual CF, and a closer look at the best wind models.</p>
 
 
 ## WIND CF Overview
@@ -215,12 +227,16 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 :::
 
 
-# Conclusion
+# Conclusion {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">Key findings, limitations and suggestions for the next steps.</p>
 
 ## Summary, limitations and suggestions
 
 
-# Appendix
+# Appendix {background-image="images/title_background.jpg" background-size="cover"}
+
+<p class="section-note">Calibration of the corrupted wind speed data, the solar CF model, and feature imporance and the FY27-29 forecast of every model.</p>
 
 ## Calibrate data: Wind_speed_kph
 
@@ -252,3 +268,16 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 
 
 ## Result for SOLAR CF - Best models
+
+
+## FY27-29 forecast of every model - WIND
+
+::: {.abs .fig style="left: 36px; top: 80px; width: 1208px;"}
+{{< embed analysis/CF_Forecast_FY27-29.qmd#wind-fy27-29-models >}}
+:::
+
+## FY27-29 forecast of every model - SOLAR
+
+::: {.abs .fig style="left: 36px; top: 80px; width: 1208px;"}
+{{< embed analysis/CF_Forecast_FY27-29.qmd#solar-fy27-29-models >}}
+:::

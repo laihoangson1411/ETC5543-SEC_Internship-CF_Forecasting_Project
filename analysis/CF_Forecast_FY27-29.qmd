@@ -215,8 +215,9 @@ The wind and the solar parts run the same steps with their own target, weather a
 #  monthly_table     monthly feature table of one portfolio (built as in WindCF/SolarCF_Analysis.qmd)
 #  fit_models        retrain every model on cfg['train_fys'] (FY23-26); the test scores are in-sample and not used
 #  scenario_forecast median, min and max CF per model, T source and future month, with TWAP, FY and LGC
-#  show_results      annual means (table), every model (figure) and the chosen model with the Exponential baseline
-#                    under each T source (figure)
+#  annual_table      annual mean CF of every model and T source (Table x.2)
+#  plot_all_models   history and FY27-29 forecast of every model (Fig x.1, also shown in the slides)
+#  plot_final_model  the chosen model under each T source, with the Exponential baseline (Fig x.2)
 # =============================================================================
 
 FINAL_MODEL = {'WIND': 'Ensemble', 'SOLAR': 'RF'}
@@ -284,20 +285,22 @@ def scenario_forecast(d, fitted):
     return fc
 
 
-def show_results(fc, d, asset, section):
-    """Table <section>.2: annual mean CF; Fig <section>.1: every model; Fig <section>.2: the chosen model and Exponential."""
+def annual_table(fc, asset, section):
+    """Table <section>.2: annual mean CF by T source and model; returns the table."""
     final = FINAL_MODEL[asset]
-    label = f'{asset.title()} contract factor'
-    hist = d['target']
-
     annual = fc.groupby(['t_source', 'method', 'FY'], sort=False)['CF_median'].mean().unstack('FY').rename(columns=fy_label)
     weather_models = annual.loc[T_MAIN].drop(BASELINES)
     spread = (weather_models.max() - weather_models.min()).max()
     table_title(f'Table {section}.2 - {asset.title()}: annual mean CF by T source and model',
                 f'with T = {T_MAIN} the weather-driven models differ by at most {spread:.3f} in any year; forecast model: {final}')
     display(annual.round(3))
+    return annual
 
-    # Every model with T = T_MAIN
+
+def plot_all_models(fc, d, asset, section, annual):
+    """Fig <section>.1: history and the FY27-29 forecast of every model (T = T_MAIN); the forecast model in bold."""
+    final = FINAL_MODEL[asset]
+    hist = d['target']
     fig, ax = plt.subplots(figsize=(14, 5.5))
     ax.plot(month_start(hist.index), hist.values, color=PURPLE, lw=1.8, label='Actual CF (FY23-26)')
     for m in fc['method'].unique():
@@ -307,14 +310,18 @@ def show_results(fc, d, asset, section):
     ax.axvline(pd.Timestamp(f'{FORECAST_FYS[0] - 1}-07-01'), color='#999999', lw=0.8, ls=':')
     ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-    ax.set_ylabel(label)
+    ax.set_ylabel(f'{asset.title()} contract factor')
     fig.tight_layout()
     bottom_legend(fig)
     add_titles(fig, f'Fig {section}.1 - {asset.title()} CF: history and forecast FY27-29 by model (T = {T_MAIN})',
                f'Mean forecast CF of {final} by year: ' + ', '.join(f'{fy} {v:.3f}' for fy, v in annual.loc[(T_MAIN, final)].items()))
     plt.show()
 
-    # Chosen model: actual CF and the forecast under each T source, with the min-max band; Exponential dashed
+
+def plot_final_model(fc, d, asset, section, annual):
+    """Fig <section>.2: the forecast model under each T source (min-max band), with the Exponential baseline dashed."""
+    final = FINAL_MODEL[asset]
+    hist = d['target']
     last_actual = d.loc[d['FY'] == cfg['train_fys'][-1], 'target'].mean()
     fig, ax = plt.subplots(figsize=(16, 5.5))
     ax.plot(month_start(hist.index), hist.values, color=PURPLE, lw=1.6, label='Actual CF (FY23-26)')
@@ -327,7 +334,7 @@ def show_results(fc, d, asset, section):
         ax.plot(month_start(base['month']), base['CF_median'], color=SOURCE_COLOUR[src], lw=1.2, ls='--',
                 label=f'Exponential, T = {src}')
     fy_separators(ax, cfg['train_fys'][0], FORECAST_FYS[-1], labels=True)
-    ax.set_ylabel(label)
+    ax.set_ylabel(f'{asset.title()} contract factor')
     fig.tight_layout()
     bottom_legend(fig, ncol=2 * len(USE_SOURCES) + 1)
     add_titles(fig, f'Fig {section}.2 - {asset.title()} CF, {final} and the Exponential baseline: actual FY23-26 and forecast FY27-29',
@@ -355,19 +362,36 @@ fc_wind = scenario_forecast(df_wind, fitted_wind)
 
 ```{python}
 # =============================================================================
-# CELL 4.2 -- Wind: annual means (Table 4.2), every model (Fig 4.1) and the Ensemble with Exponential under each T source (Fig 4.2)
+# CELL 4.2 -- Wind: annual mean CF of every model and T source (Table 4.2)
 # =============================================================================
 
-show_results(fc_wind, df_wind, 'WIND', 4)
+annual_wind = annual_table(fc_wind, 'WIND', 4)
 ```
 
-### 4.3 Write the csv
+```{python}
+#| label: wind-fy27-29-models
+# =============================================================================
+# CELL 4.3 -- Wind: history and FY27-29 forecast of every model (Fig 4.1, also shown in the slides)
+# =============================================================================
+
+plot_all_models(fc_wind, df_wind, 'WIND', 4, annual_wind)
+```
+
+```{python}
+# =============================================================================
+# CELL 4.4 -- Wind: the Ensemble under each T source, with the Exponential baseline (Fig 4.2)
+# =============================================================================
+
+plot_final_model(fc_wind, df_wind, 'WIND', 4, annual_wind)
+```
+
+### Write the csv
 
 The forecast of the Ensemble is written to `data/forecast/FY27-29_CF_Forecast.csv`: one row per T source and month, with the median CF, the band, the TWAP and the LGC price used. The rows of this part have `asset_type = WIND`; the solar rows already in the file are kept. `months without forecast` is the number of rows where no historical year gave a prediction (a month with no negative price in all four years); it should be 0.
 
 ```{python}
 # =============================================================================
-# CELL 4.3 -- Wind: write the forecast of the Ensemble to data/forecast/FY27-29_CF_Forecast.csv
+# CELL 4.5 -- Wind: write the forecast of the Ensemble to data/forecast/FY27-29_CF_Forecast.csv
 # =============================================================================
 
 wind_log = write_forecast(fc_wind, 'WIND', FINAL_MODEL['WIND'], FORECAST_FYS, cfg['forecast_dir'])
@@ -393,19 +417,36 @@ fc_solar = scenario_forecast(df_solar, fitted_solar)
 
 ```{python}
 # =============================================================================
-# CELL 5.2 -- Solar: annual means (Table 5.2), every model (Fig 5.1) and the RF with Exponential under each T source (Fig 5.2)
+# CELL 5.2 -- Solar: annual mean CF of every model and T source (Table 5.2)
 # =============================================================================
 
-show_results(fc_solar, df_solar, 'SOLAR', 5)
+annual_solar = annual_table(fc_solar, 'SOLAR', 5)
 ```
 
-### 5.3 Write the csv
+```{python}
+#| label: solar-fy27-29-models
+# =============================================================================
+# CELL 5.3 -- Solar: history and FY27-29 forecast of every model (Fig 5.1, also shown in the slides)
+# =============================================================================
+
+plot_all_models(fc_solar, df_solar, 'SOLAR', 5, annual_solar)
+```
+
+```{python}
+# =============================================================================
+# CELL 5.4 -- Solar: the RF under each T source, with the Exponential baseline (Fig 5.2)
+# =============================================================================
+
+plot_final_model(fc_solar, df_solar, 'SOLAR', 5, annual_solar)
+```
+
+### Write the csv
 
 The forecast of the RF goes to the same file, with `asset_type = SOLAR`; the wind rows already in the file are kept.
 
 ```{python}
 # =============================================================================
-# CELL 5.3 -- Solar: write the forecast of the RF to data/forecast/FY27-29_CF_Forecast.csv
+# CELL 5.5 -- Solar: write the forecast of the RF to data/forecast/FY27-29_CF_Forecast.csv
 # =============================================================================
 
 solar_log = write_forecast(fc_solar, 'SOLAR', FINAL_MODEL['SOLAR'], FORECAST_FYS, cfg['forecast_dir'])

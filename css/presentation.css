@@ -17,11 +17,13 @@
 
 /* Title slide: white text on the purple / orange background */
 #title-slide { text-align: left !important; top: 0 !important; padding: 270px 0 0 107px !important; }
-#title-slide h1.title { color: #fff; font-size: 50px; font-weight: 400; margin: 0 0 24px 0; }
+#title-slide h1.title { color: #fff; font-size: 50px; font-weight: 700; margin: 0 0 24px 0; }
 #title-slide .subtitle, #title-slide .date { color: #fff; font-style: italic; font-size: 30px; margin: 0 0 10px 0; }
 
-/* Section slides (# headings): purple title, left-aligned */
-.reveal .slides section.level1 h1 { color: var(--purple); font-size: 44px; font-weight: 700; text-transform: none; }
+/* Section slides (# headings): the title-slide background, white title */
+.reveal .slides section.level1 h1 { color: #fff; font-size: 44px; font-weight: 700; text-transform: none; }
+.reveal .slides section.level1 p.section-note { color: #fff; opacity: 0.85; font-size: 20px; font-style: italic;
+                                              max-width: 640px; line-height: 1.4; }
 
 /* Layout helpers: absolute position inside the slide (px on the 1280 x 720 canvas) */
 .reveal .abs { position: absolute; }

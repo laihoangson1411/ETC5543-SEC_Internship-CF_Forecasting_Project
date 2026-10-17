@@ -1,15 +1,19 @@
 """
 Plot utilities shared by every notebook.
 
-Colour palette, plot style, figure titles and table captions.
+Colour palette, plot style, figure titles, table captions and the data-dictionary tables of the slides.
 """
+
+import csv
+import html
+import re
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.transforms import ScaledTranslation
-from IPython.display import display, Markdown
+from IPython.display import display, Markdown, HTML
 
 # ── Colours: wind / main series = purple, solar / contrast = orange ──
 PURPLE = '#391B56'
@@ -129,3 +133,53 @@ def importance_bars(ax, imp, signed):
                     textcoords='offset points', ha='left' if v >= 0 else 'right', va='center', fontsize=7)
     ax.margins(x=0.2)                                   # room for the numbers at both ends
     ax.grid(axis='y', visible=False)
+
+
+def _cell_html(text):
+    """Cell text to HTML: **text** is bold; a cell whose lines all start with '- ' is a bulleted list."""
+    lines = [re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', html.escape(line.strip(), quote=False))
+             for line in text.strip().splitlines()]
+    if lines and all(line.startswith('- ') for line in lines):
+        return '<ul>' + ''.join(f'<li>{line[2:]}</li>' for line in lines) + '</ul>'
+    return '<br>'.join(lines)
+
+
+def dictionary_table(path, css_class='dd'):
+    """Data-dictionary table of the slides, read from a CSV file (the style is in css/presentation.css).
+
+    The CSV stays plain text:
+      - an empty header extends the header on its left (colspan);
+      - an empty cell extends the cell above it (rowspan), e.g. the group name is written once;
+      - the first two columns are the group and the ID (bold, classes grp and id).
+    """
+    with open(path, newline='', encoding='utf-8') as f:
+        header, *rows = csv.reader(f)
+    n_cols = len(header)
+    rows = [r + [''] * (n_cols - len(r)) for r in rows]
+
+    heads = []                                        # [label, colspan]
+    for h in header:
+        if h.strip() or not heads:
+            heads.append([h.strip(), 1])
+        else:
+            heads[-1][1] += 1
+    out = ['<tr>' + ''.join(f'<th colspan="{c}">{_cell_html(h)}</th>' if c > 1 else f'<th>{_cell_html(h)}</th>'
+                            for h, c in heads) + '</tr>']
+
+    span = [[0] * n_cols for _ in rows]               # rowspan of each cell; 0 = covered by the cell above
+    for j in range(n_cols):
+        top = 0
+        for i, row in enumerate(rows):
+            if i == 0 or row[j].strip():
+                top = i
+            span[top][j] += 1
+    cls = {0: ' class="grp"', 1: ' class="id"'}
+    for i, row in enumerate(rows):
+        cells = []
+        for j in range(n_cols):
+            if span[i][j]:
+                rowspan = f' rowspan="{span[i][j]}"' if span[i][j] > 1 else ''
+                cells.append(f'<td{cls.get(j, "")}{rowspan}>{_cell_html(row[j])}</td>')
+        out.append('<tr>' + ''.join(cells) + '</tr>')
+    # data-quarto-disable-processing: Quarto keeps the HTML table as it is (otherwise it sets equal column widths)
+    return HTML(f'<table class="{css_class}" data-quarto-disable-processing="true">' + ''.join(out) + '</table>')

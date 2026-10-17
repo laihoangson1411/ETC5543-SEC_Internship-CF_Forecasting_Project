@@ -22,6 +22,7 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   │   ├── MLF_FY23-26.csv                    (AEMO_VICMLF_FY23-26.csv)
 │   │   ├── PriceForecast_30min.csv            (VIC_Central_30min_PriceForecast.csv), time-ending
 │   │   └── PriceForecast_Month.csv            (20261001_ASXadjustedPrice.csv)
+│   ├── dictionary/              # data-dictionary tables of the slides (assets_stations.csv, variables_wind.csv)
 │   ├── processed/               # written by the analysis notebooks
 │   │   ├── HistoricContractFactors.csv        <- IDA_ContractFactors.qmd
 │   │   └── QM_HistoricWeather_30min.csv       <- Wind_QuantileMapping.qmd
@@ -33,7 +34,7 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   ├── utilsGeneration.py       # commissioning and exclusion periods
 │   ├── utilsModels.py           # models, Exponential baseline, metrics
 │   ├── utilsScenario.py         # price forecast, LGC price and shrink factor, scenario rows
-│   └── utilsPlot.py             # colours, plot style, titles, shared plots
+│   └── utilsPlot.py             # colours, plot style, titles, shared plots, data-dictionary tables
 ├── analysis/                    # analysis notebooks (render options in analysis/_metadata.yml)
 │   ├── IDA_ContractFactors.qmd
 │   ├── IDA_Weather_SolarIrradiance.qmd

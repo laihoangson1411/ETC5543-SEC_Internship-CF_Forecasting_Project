@@ -1,0 +1,12 @@
+Type,ID,Location,Notes
+Wind asset,DUNDWF3,Dundonnell,Very clean history: only four 1-day exclusions.
+,BRYB1WF1,Berrybank,Six short exclusions (longest 12 days).
+,BULGANA1,Bulgana,"Co-located battery (20 MW). Longest exclusion: Jun 2024 – Dec 2025 (578 days), plus other short ones."
+,MRTLSWF1,Mortlake,"Not yet online before Jun 2023, so no usable data in FY23."
+Solar asset,WINTSF1,Winton,Two exclusions: Jul – Aug 2024 (61 days) and Nov 2024 – Jan 2025 (53 days).
+,GLENSF1,Glenrowan,Started operating late: data begins 1 Dec 2023
+,COHUNSF1,Cohuna,"Many long exclusions, including Mar 2024 – Apr 2025 (376 days)."
+Weather Station,89002,Ballarat Aerodrome,"- **Wind:** 89002 and 86338 are averaged because their wind speed correlates with generation (r = 0.32 - 0.47). **85280 is excluded** because it is weak (r = 0.06 - 0.20).
+- **Solar:** all 3 stations are averaged because GHI correlations are almost identical (differences ≤ 0.02 for each asset), data quality checked."
+,86338,Melbourne (Olympic Park),
+,85280,Latrobe Valley Airport,

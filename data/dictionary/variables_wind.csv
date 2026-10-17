@@ -1,0 +1,10 @@
+Variable,,What it is,Why consider it
+VIC1 Price,twap,Monthly mean of half-hourly VIC1 price (1),"TWAP is the CF denominator, and the current method uses it"
+,twap_neg,Mean price of the half-hours below $0,"DWAP floors negatives at $0 but TWAP does not, so deeper negatives raise CF"
+,twap_pos,Mean price of the half-hours at or above $0,Sets the level of the positive prices that make up DWAP
+Weather,wind_speed_kph,Monthly mean wind speed,Main driver of wind output **(calibrated)**
+,temp_c,Monthly mean temperature,Related to air density and the seasonal cycle
+,rh,Relative humidity,"Humid air is less dense, so wind carries slightly less power at the same wind speed"
+,dp_c,Dew point,"Direct measure of air moisture (unlike RH, it does not change with temperature)."
+,rainfall_mm,Monthly rainfall,Rainy weather systems such as fronts and storms are often windy.
+Seasonality,"month_sin, month_cos",Month of the year as a circle (seasonal shape),Captures the seasonal pattern of prices and generation

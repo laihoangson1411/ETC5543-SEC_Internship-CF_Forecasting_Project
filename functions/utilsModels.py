@@ -176,3 +176,25 @@ def predict_method(fitted, method, feat_df):
     if method == 'Ensemble':
         return (predict_cf('RF', fitted['RF'], feat_df) + predict_cf('XGBoost', fitted['XGBoost'], feat_df)) / 2
     return predict_cf(method, fitted[method], feat_df)
+
+
+def feature_importance(fitted, method, train):
+    """Importance of each feature of a fitted model; returns (Series, signed), or (None, False) for a baseline.
+
+    Linear: coefficient x feature standard deviation on `train` (signed). Ridge: coefficient on the
+    standardised features (signed). RF / XGBoost: feature_importances_, normalised to sum to 1 (>= 0).
+    Ensemble: mean of the RF and XGBoost shares. Seasonal Naive and Exponential use no features.
+    """
+    if method == 'Ensemble':
+        rf, xgb = feature_importance(fitted, 'RF', train)[0], feature_importance(fitted, 'XGBoost', train)[0]
+        return (rf + xgb) / 2, False
+    info = fitted.get(method, {})
+    mdl, feats = info.get('model'), info.get('feats')
+    if method not in MODEL_FNS or mdl is None:
+        return None, False
+    if method == 'Linear':
+        return pd.Series(mdl.coef_ * train[feats].std().values, index=feats), True
+    if method == 'Ridge':
+        return pd.Series(mdl.coef_, index=feats), True
+    imp = pd.Series(mdl.feature_importances_, index=feats)
+    return imp / imp.sum(), False

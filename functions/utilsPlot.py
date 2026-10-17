@@ -82,3 +82,19 @@ def annotated_heatmap(ax, table, cmap, vmin, vmax, fontsize=9, rotate_x=False):
                 dark = abs(v - (vmin + vmax) / 2) > (vmax - vmin) * 0.2
                 ax.text(j, i, f'{v:.2f}', ha='center', va='center', fontsize=fontsize, color='white' if dark else '#222222')
     return im
+
+
+def importance_bars(ax, imp, signed):
+    """Horizontal bars of a feature importance, largest at the top, with the value at the end of each bar.
+
+    Signed importances (linear models) are green when positive and red when negative; shares (tree models) are blue.
+    """
+    imp = imp.reindex(imp.abs().sort_values().index)
+    colors = ['#2ca02c' if v >= 0 else '#d62728' for v in imp.values] if signed else 'steelblue'
+    ax.barh(imp.index, imp.values, color=colors, alpha=0.85)
+    ax.axvline(0, color='black', linewidth=0.6)
+    for y, v in enumerate(imp.values):
+        ax.annotate(f'{v:+.3f}' if signed else f'{v:.3f}', xy=(v, y), xytext=(3 if v >= 0 else -3, 0),
+                    textcoords='offset points', ha='left' if v >= 0 else 'right', va='center', fontsize=7)
+    ax.margins(x=0.2)                                   # room for the numbers at both ends
+    ax.grid(axis='y', visible=False)

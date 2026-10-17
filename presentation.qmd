@@ -21,6 +21,8 @@ format:
     css: css/presentation.css         # colours, layout helpers, data-dictionary tables, workflow diagram
 ---
 
+# Background
+
 ## What is Contract Factor?
 
 ::: {style="width: 604px; margin-top: 22px;"}
@@ -51,7 +53,7 @@ We use monthly CF throughout, because SEC calculates CF monthly, our price, LGC 
 {{< embed analysis/EDA.qmd#monthly-cf >}}
 :::
 
-## The recent CF forecasting model and its issues
+## The recent CF forecasting model
 
 ::: {style="width: 620px; margin-top: 12px;"}
 Exponential relationships fit between VIC1Price TWAP and CF, separately for each season
@@ -72,29 +74,11 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 ## End-to-End Modelling Workflow
 
-<svg class="abs" style="left: 0; top: 0;" width="1280" height="720" viewBox="0 0 1280 720">
-<defs><marker id="ah" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#391B56"/></marker></defs>
-<g stroke="#391B56" stroke-width="1.6" stroke-dasharray="4 3" fill="none" marker-end="url(#ah)">
-<line x1="422" y1="134" x2="422" y2="199"/><line x1="422" y1="243" x2="422" y2="308"/>
-<line x1="422" y1="351" x2="422" y2="417"/><line x1="422" y1="460" x2="422" y2="526"/>
-<path d="M293,439 H268 V222 H291"/>
-</g>
-</svg>
+<div class="center-fig"><img src="images/Workflow.png" alt="End-to-end modelling workflow"></div>
 
-<div class="wf-box" style="top: 92px;">Initial Data Analysis (IDA)</div>
-<div class="wf-box" style="top: 201px;">Data Processing</div>
-<div class="wf-box" style="top: 309px;">Exploratory Data Analysis (EDA)</div>
-<div class="wf-box" style="top: 418px;">Model Fitting</div>
-<div class="wf-box" style="top: 527px;">Forecasting</div>
+# Data
 
-<div class="wf-txt" style="top: 99px;">Inventory 7 assets, 3 weather stations, check coverage and data quality</div>
-<div class="wf-txt" style="top: 206px;">Align, scale, build monthly features, correct corrupted wind speed</div>
-<div class="wf-txt" style="top: 306px;">Price shape, weather-CF relationships, variable screening<br>Decide which variables to be the inputs for the models</div>
-<div class="wf-txt" style="top: 402px;">Train: FY23-25, Test: FY26<br>Model: Seasonal Naïve, Linear, Ridge, RF, XGBoost, Ensemble<br>Ensemble the best models for improvement</div>
-<div class="wf-txt" style="top: 520px;">Direct forecasting and scenario forecasting<br>LGC adjustment</div>
-<div class="abs" style="left: 40px; top: 291px; width: 200px; text-align: right; line-height: 1.3;">Refine data treatment to improve accuracy</div>
-
-## Data dictionary
+## Assets & Stations
 
 <table class="dd">
 <tr><th>Type</th><th>ID</th><th>Location</th><th>Notes</th></tr>
@@ -115,7 +99,7 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 <p class="foot">We model CF at portfolio level (wind and solar), not asset by asset</p>
 
-## Data dictionary
+## Variables - WIND CF Model
 
 <table class="dd">
 <tr><th colspan="2">Variable</th><th>What it is</th><th>Why consider it</th></tr>
@@ -132,7 +116,9 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 
 <p class="foot">\(1\) Monthly mean TWAP includes both positives and negatives</p>
 
-## EDA after QM correcting
+# Feature selection
+
+## Feature selection - WIND Model
 
 ::: {style="width: 509px; margin-top: 8px;"}
 -   For Wind, we kept the variables most correlated with WIND_CF (twap_neg −0.84, month_cos 0.81, rh −0.60, wind_speed_kph as the physical driver) and dropped redundant ones (twap, temp_c, dp_c) and uncorrelated ones (rainfall_mm).
@@ -143,6 +129,8 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 ::: {.abs .fig style="left: 544px; top: 38px; width: 660px;"}
 {{< embed analysis/EDA.qmd#corr-wind >}}
 :::
+
+# Price structure & LGC
 
 ## Negative prices and the certificate that sets their floor
 
@@ -188,22 +176,30 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 </table>
 </div>
 
+# Modelling & forecasting
+
 ## Forecasting Method
 
+<div class="center-fig"><img src="images/ForecastingMethod.png" alt="Scenario forecasting method"></div>
 
 ## Model Summary
 
 
-## Result for WIND CF - Overview
+# Results
 
 
-## Result for WIND CF - Best models
+## WIND CF Overview
 
 
-## Summary + Limitation + Suggestion
+## WIND CF Best models
 
 
-## Appendix
+# Conclusion
+
+## Summary, limitations and suggestions
+
+
+# Appendix
 
 ## Calibrate data: Wind_speed_kph
 
@@ -224,6 +220,12 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 ::: {.abs .fig style="left: 656px; top: 372px; width: 561px;"}
 {{< embed analysis/Wind_QuantileMapping.qmd#monthly-ws-after-qm >}}
 :::
+
+## Variables - SOLAR CF Model
+
+
+## Feature selection - SOLAR Model
+
 
 ## Result for SOLAR CF - Overview
 

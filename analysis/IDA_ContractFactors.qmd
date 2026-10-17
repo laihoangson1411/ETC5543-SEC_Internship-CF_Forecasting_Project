@@ -305,18 +305,20 @@ add_check('Missing half-hours (commissioning and exclusion periods)', gen_tbl['m
 
 One bar per asset (wind on top, solar below) over the analysis window, from `ExclusionPeriods.csv`:
 
-- **green**: the asset is available,
+- **light purple**: the asset is available,
 - **light grey**: not yet online, or commissioning,
-- **gold / orange / red**: an exclusion period shorter than 14 days / 14-90 days / longer than 90 days (the longer ones show their length in days).
+- **light orange / orange / dark orange**: an exclusion period shorter than 14 days / 14-90 days / longer than 90 days (the longer ones show their length in days).
 
 These are the periods set to missing in the generation data, so the gaps in Fig 3.2 and the missing half-hours in Table 5.1 should line up with the coloured bars. The cell also records how many asset-months have no data or only partial data (expected when an asset is excluded or not yet online) and checks that every month with data has a contract factor.
 
 ```{python}
+#| label: exclusion-periods
 # =============================================================================
 # CELL 5.2 -- Availability timeline and exclusion periods per asset
 # One horizontal bar per asset (wind on top, solar below):
-#  - light grey: before the asset came online / commissioning;  green: available
-#  - gold / orange / red: exclusion periods by length (<14d, 14-90d, >90d)
+#  - light grey: before the asset came online / commissioning;  light purple: available
+#  - light orange / orange / dark orange: exclusion periods by length (<14d, 14-90d, >90d)
+#  EXCL_COLOURS (theme colours) is also used by cell 5.3
 # The online date of an asset is its first half-hour with positive generation in the raw file.
 # =============================================================================
 
@@ -355,7 +357,8 @@ def exclusion_group(days):
     return 'Exclusion > 90d' if days > 90 else 'Exclusion 14-90d' if days > 14 else 'Exclusion < 14d'
 
 
-GROUP_STYLE = {'Exclusion > 90d': ('red', 0.8), 'Exclusion 14-90d': ('darkorange', 0.7), 'Exclusion < 14d': ('gold', 0.6)}
+EXCL_COLOURS = {'Not yet online': '#DDDDDD', 'Available': '#DCD3E6', 'Exclusion < 14d': '#F8D2A6',
+                'Exclusion 14-90d': ORANGE, 'Exclusion > 90d': '#9C3D0A'}   # exclusions: light to dark orange
 
 
 def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start, end):
@@ -377,8 +380,8 @@ def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start,
     for i, a in enumerate(assets):
         y = n - 1 - i                                         # first asset at the top
         online, asset_excl, available_from = availability(a, excl, first_online, start)
-        bar(y, start, available_from, facecolor='lightgrey', alpha=0.5)              # not yet online / commissioning
-        bar(y, available_from, end, facecolor='mediumseagreen', alpha=0.35)          # available
+        bar(y, start, available_from, facecolor=EXCL_COLOURS['Not yet online'])     # not yet online / commissioning
+        bar(y, available_from, end, facecolor=EXCL_COLOURS['Available'])             # available
 
         for _, r in asset_excl.iterrows():
             es, ee = r['ExclusionStart'], r['ExclusionEnd']
@@ -386,10 +389,9 @@ def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start,
                 continue                                      # outside the plot window
             days = (ee - es).days
             if es <= online:
-                bar(y, es, ee, facecolor='lightgrey', alpha=0.5)                     # commissioning: grey, no label
+                bar(y, es, ee, facecolor=EXCL_COLOURS['Not yet online'])             # commissioning: grey, no label
             else:
-                colour, alpha = GROUP_STYLE[exclusion_group(days)]
-                bar(y, es, ee, facecolor=colour, alpha=alpha, edgecolor='black', linewidth=0.3)
+                bar(y, es, ee, facecolor=EXCL_COLOURS[exclusion_group(days)], edgecolor='black', linewidth=0.3)
                 if days > 14:                                 # label the longer exclusions with their length
                     mid = max(es, start) + (min(ee, end) - max(es, start)) / 2
                     ax.text(mid, y, f'{days}d', ha='center', va='center', fontsize=7, fontweight='bold', color='white')
@@ -403,13 +405,13 @@ def plot_exclusion_periods(excl, first_online, wind_assets, solar_assets, start,
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
     ax.tick_params(axis='x', labelsize=8)
     ax.grid(axis='x', linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)                                       # grid behind the bars
     fig.tight_layout()
     bottom_legend(fig, handles=[
-        Patch(facecolor='mediumseagreen', alpha=0.35, label='Available (online)'),
-        Patch(facecolor='lightgrey', alpha=0.5, label='Not yet online / commissioning'),
-        Patch(facecolor='red', alpha=0.8, edgecolor='black', linewidth=0.3, label='Exclusion > 90d'),
-        Patch(facecolor='darkorange', alpha=0.7, edgecolor='black', linewidth=0.3, label='Exclusion 14-90d'),
-        Patch(facecolor='gold', alpha=0.6, edgecolor='black', linewidth=0.3, label='Exclusion < 14d'),
+        Patch(facecolor=EXCL_COLOURS['Available'], label='Available (online)'),
+        Patch(facecolor=EXCL_COLOURS['Not yet online'], label='Not yet online / commissioning'),
+        *[Patch(facecolor=EXCL_COLOURS[g], edgecolor='black', linewidth=0.3, label=g)
+          for g in ['Exclusion > 90d', 'Exclusion 14-90d', 'Exclusion < 14d']],
     ], ncol=5)
     return fig
 
@@ -447,7 +449,6 @@ A large share in the "> 90d" group means one long outage dominates the asset's h
 
 EXCL_CATS = ['Available', 'Exclusion < 14d', 'Exclusion 14-90d', 'Exclusion > 90d']
 SHOW_CATS = EXCL_CATS[1:]                                       # groups shown in the table and bars
-EXCL_COLOURS = {'Available': '#8fd3a9', 'Exclusion < 14d': 'gold', 'Exclusion 14-90d': 'darkorange', 'Exclusion > 90d': 'red'}
 
 
 def exclusion_share_table(excl, first_online, assets, start, end):
@@ -508,6 +509,7 @@ def plot_exclusion_share(tbl, wind_assets, solar_assets):
     ax.set_xlim(0, max(tbl[SHOW_CATS].sum(axis=1).max() * 1.15, 1))      # zoom to the excluded range
     ax.set_xlabel('% of online days')
     ax.grid(axis='x', linestyle='--', alpha=0.3)
+    ax.set_axisbelow(True)                                       # grid behind the bars
     fig.tight_layout()
     bottom_legend(fig, handles=[Patch(facecolor=EXCL_COLOURS[c], label=c) for c in SHOW_CATS], ncol=3)
     return fig

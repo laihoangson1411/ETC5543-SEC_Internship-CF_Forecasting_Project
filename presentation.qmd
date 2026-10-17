@@ -238,6 +238,29 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 
 <p class="section-note">Calibration of the corrupted wind speed data, the solar CF model, and feature imporance and the FY27-29 forecast of every model.</p>
 
+## Abbreviations
+
+```{python}
+dictionary_table('data/dictionary/abbreviations.csv', bold_cols=[0, 2], css_class='dd abbr')
+```
+
+## Data sources
+
+```{python}
+dictionary_table('data/dictionary/data_sources.csv', bold_cols=1)
+```
+
+## Exclusion periods
+
+::: {style="margin-top: 4px;"}
+-   **Exclusion periods** (`ExclusionPeriods.csv`, SEC) are the days an asset's output does not count under its contract, for example outages or commissioning. Their half-hours are set to missing before the CF is computed, so a monthly CF uses only the available half-hours.
+-   The longest are BULGANA1 (Jun 2024 - Dec 2025, 578 days) and COHUNSF1 (Mar 2024 - Apr 2025, 376 days); MRTLSWF1 and GLENSF1 came online during the window (light grey).
+:::
+
+::: {.abs .fig style="left: 140px; top: 168px; width: 1000px;"}
+{{< embed analysis/IDA_ContractFactors.qmd#exclusion-periods >}}
+:::
+
 ## Calibrate data: Wind_speed_kph
 
 ::: {.abs .box .qm-box style="left: 36px; top: 112px; width: 540px; min-height: 170px;"}
@@ -319,6 +342,62 @@ dictionary_table('data/dictionary/variables_solar.csv')
 -   Ridge's band is wider than RF's (Sep-Dec) but stays flat around 0.4: it only catches the low CF of Sep-Oct, while RF's narrow band sits on the actual CF in Jul-Aug and Dec-Feb
 :::
 
+
+## MAE by model (FY26 test)
+
+::: {.abs .fig style="left: 36px; top: 90px; width: 595px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-mae-bars >}}
+:::
+
+::: {.abs .fig style="left: 650px; top: 90px; width: 595px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-mae-bars >}}
+:::
+
+## Error metrics (FY26 test)
+
+::: {.abs .tbl-box .tbl-wide style="left: 36px; top: 70px; width: 1208px;"}
+<div class="subhead">WIND</div>
+{{< embed analysis/WindCF_Analysis.qmd#wind-metrics >}}
+:::
+
+::: {.abs .tbl-box .tbl-wide style="left: 36px; top: 380px; width: 1208px;"}
+<div class="subhead">SOLAR</div>
+{{< embed analysis/SolarCF_Analysis.qmd#solar-metrics >}}
+:::
+
+## Feature importance of every model - WIND
+
+::: {.abs .fig style="left: 86px; top: 70px; width: 1108px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-importance-all >}}
+:::
+
+## Feature importance of every model - SOLAR
+
+::: {.abs .fig style="left: 86px; top: 70px; width: 1108px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-importance-all >}}
+:::
+
+## Linear and Ridge fit: coefficients and checks
+
+::: {.abs .tbl-box style="left: 36px; top: 64px; width: 590px;"}
+<div class="subhead">WIND</div>
+{{< embed analysis/WindCF_Analysis.qmd#wind-linear-fit >}}
+:::
+
+::: {.abs .tbl-box style="left: 654px; top: 64px; width: 590px;"}
+<div class="subhead">SOLAR</div>
+{{< embed analysis/SolarCF_Analysis.qmd#solar-linear-fit >}}
+:::
+
+## Exponential baseline vs the best model (FY26 test)
+
+::: {.abs .fig style="left: 60px; top: 66px; width: 540px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-exp-vs-best >}}
+:::
+
+::: {.abs .fig style="left: 680px; top: 66px; width: 540px;"}
+{{< embed analysis/SolarCF_Analysis.qmd#solar-exp-vs-best >}}
+:::
 
 ## FY27-29 forecast of every model - WIND
 

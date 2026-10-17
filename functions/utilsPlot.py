@@ -36,7 +36,7 @@ MODEL_COLORS = {'Linear': '#4C72B0', 'Ridge': '#E67E22', 'RF': '#55A868', 'XGBoo
 # Correlation colour map: -1 = orange, 0 = white, +1 = purple
 CORR_CMAP = LinearSegmentedColormap.from_list('orange_purple', [ORANGE, 'white', PURPLE])
 
-BASE_RC = {'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3,
+BASE_RC = {'figure.dpi': 110, 'axes.grid': True, 'grid.alpha': 0.3, 'axes.axisbelow': True,   # grid behind bars
            'axes.spines.top': False, 'axes.spines.right': False}
 SMALL_FONTS_RC = {'font.size': 9, 'axes.titlesize': 9.5, 'xtick.labelsize': 8,
                   'ytick.labelsize': 8, 'legend.fontsize': 8}
@@ -161,7 +161,8 @@ def dictionary_table(path, bold_cols=2, css_class='dd'):
       - an empty header extends the header on its left (colspan);
       - an empty cell extends the cell above it (rowspan), e.g. the group name is written once;
       - the first `bold_cols` columns are bold: by default the group and the ID (classes grp and id);
-        bold_cols=1 for a table whose first column is the only label (e.g. the model summary).
+        bold_cols=1 for a table whose first column is the only label (e.g. the model summary), or a list of
+        column positions (e.g. [0, 2] for a table of two label/meaning pairs).
     """
     with open(path, newline='', encoding='utf-8') as f:
         header, *rows = csv.reader(f)
@@ -184,7 +185,8 @@ def dictionary_table(path, bold_cols=2, css_class='dd'):
             if i == 0 or row[j].strip():
                 top = i
             span[top][j] += 1
-    cls = {j: ' class="grp"' if j == 0 else ' class="id"' for j in range(bold_cols)}
+    bold = range(bold_cols) if isinstance(bold_cols, int) else bold_cols
+    cls = {j: ' class="grp"' if j == 0 else ' class="id"' for j in bold}
     for i, row in enumerate(rows):
         cells = []
         for j in range(n_cols):
@@ -193,7 +195,9 @@ def dictionary_table(path, bold_cols=2, css_class='dd'):
                 cells.append(f'<td{cls.get(j, "")}{rowspan}>{_cell_html(row[j])}</td>')
         out.append('<tr>' + ''.join(cells) + '</tr>')
     # data-quarto-disable-processing: Quarto keeps the HTML table as it is (otherwise it sets equal column widths)
-    return HTML(f'<table class="{css_class}" data-quarto-disable-processing="true">' + ''.join(out) + '</table>')
+    # header row in <thead>, so the row-name style of `table.dd tbody th` does not apply to it
+    return HTML(f'<table class="{css_class}" data-quarto-disable-processing="true"><thead>' + out[0] + '</thead><tbody>'
+                + ''.join(out[1:]) + '</tbody></table>')
 
 
 def mae_ranking_table(mae, baselines, models):
@@ -219,3 +223,16 @@ def mae_ranking_table(mae, baselines, models):
         out.append(row(m, v, f'rgb({r * 255:.0f},{g * 255:.0f},{b * 255:.0f})', bold=v == lo))
     return HTML('<table class="mae" style="border-collapse:collapse;" data-quarto-disable-processing="true">'
                 + ''.join(out) + '</table>')
+
+
+def slide_table(df, digits=3, css_class='dd'):
+    """A DataFrame as an HTML table in the slide style (css/presentation.css), numbers rounded to `digits`
+    (whole numbers such as counts without decimals).
+
+    Quarto keeps the table as it is (data-quarto-disable-processing), so it can be embedded in the slides.
+    """
+    def fmt(v):
+        return f'{v:.0f}' if float(v).is_integer() and abs(v) >= 1 else f'{v:.{digits}f}'   # counts without decimals
+
+    html_tbl = df.to_html(classes=css_class, border=0, na_rep='', float_format=fmt)
+    return HTML(html_tbl.replace('<table ', '<table data-quarto-disable-processing="true" ', 1))

@@ -16,6 +16,10 @@ from sklearn.linear_model import LinearRegression, RidgeCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import statsmodels.api as sm
+from statsmodels.stats.diagnostic import het_breuschpagan
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.stats.stattools import durbin_watson, jarque_bera
 from xgboost import XGBRegressor          # on macOS XGBoost also needs OpenMP: brew install libomp
 
 from utilsContractFactors import expfunctionCF
@@ -221,3 +225,35 @@ def ridge_pvalues(fitted, train, target_col='target'):
 def p_stars(p):
     """Significance stars: *** p < 0.001, ** p < 0.01, * p < 0.05, '' otherwise."""
     return '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else ''
+
+
+def linear_fit_checks(fitted, train, target_col='target'):
+    """Coefficients and residual checks of the Linear and Ridge models on the training months.
+
+    Coefficients are on standardised features (one sd), so Linear and Ridge can be compared: Linear by OLS with
+    its p-values, Ridge with the approximate p-values of ridge_pvalues; VIF of each feature.
+
+    Returns:
+        (coefficients DataFrame indexed by feature, checks DataFrame with one column per model).
+    """
+    feats = fitted['Linear']['feats']
+    d = train.dropna(subset=feats + [target_col])
+    X = sm.add_constant(pd.DataFrame(StandardScaler().fit_transform(d[feats]), columns=feats, index=d.index))
+    y = d[target_col]
+    ols = sm.OLS(y, X).fit()
+    ridge = fitted['Ridge']['model']
+    ridge_resid = y.values - ridge.predict(ridge.scaler_.transform(d[feats].values))
+
+    coef = pd.DataFrame({'Linear coef': ols.params[feats], 'Linear p': ols.pvalues[feats],
+                         'Ridge coef': pd.Series(ridge.coef_, index=feats), 'Ridge p': ridge_pvalues(fitted, train, target_col),
+                         'VIF': [variance_inflation_factor(X.values, i) for i in range(1, X.shape[1])]})
+
+    def checks(resid):
+        return {'R2 (training months)': 1 - (resid ** 2).sum() / ((y - y.mean()) ** 2).sum(),
+                'Durbin-Watson (2 = no autocorrelation)': durbin_watson(resid),
+                'Breusch-Pagan p (> 0.05: constant variance)': het_breuschpagan(resid, X)[1],
+                'Jarque-Bera p (> 0.05: normal residuals)': jarque_bera(resid)[1]}
+    chk = pd.DataFrame({'Linear': checks(ols.resid.values), 'Ridge': checks(ridge_resid)})
+    chk.loc['Ridge alpha (cross-validation)'] = [np.nan, ridge.alpha_]
+    chk.loc['Training months'] = [len(d), len(d)]
+    return coef, chk

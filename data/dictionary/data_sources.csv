@@ -1,0 +1,12 @@
+Data,File (data/raw/),Source,Used for
+"Generation of each asset and VIC1 price, half-hourly",GenerationMW_FY19-26.csv,NEMSight (AEMO data),"Contract factor, price features"
+"Asset list, capacity and contracted share",Asset.csv,SEC,Scaling and portfolios
+Exclusion periods,ExclusionPeriods.csv,SEC,Removing excluded half-hours
+Marginal loss factors,MLF_FY23-26.csv,AEMO,Scaling the generation
+"Weather (wind speed, temperature, humidity, ...), half-hourly",HistoricWeather_30min.csv,DTN,Wind features
+"Solar irradiance (GHI, DNI, air temperature), half-hourly",HistoricSolarIrradiance_30min.csv,Solcast,Solar features
+Historical LGC price,HistoricLGCPrice.csv,SEC,LGC adjustment of negative prices
+Forecast LGC price by calendar year,ForecastedLGCPrice.csv,Mercari,LGC adjustment of FY27-29
+"Price forecast, half-hourly",PriceForecast_30min.csv,SEC,Forecast TWAP T of the FY26 test
+ASX-adjusted monthly price forecast,PriceForecast_Month.csv,SEC,Forecast TWAP T of FY27-29
+Coordinates of the weather stations and farms,Locations.csv,"BoM station list, asset locations",Choice of weather stations

@@ -72,3 +72,14 @@
 .reveal .box p { margin: 0 0 6px 0; }
 .reveal .qm-box { font-size: 17px; text-align: justify; display: flex; flex-direction: column; justify-content: center; }
 .reveal .qm-box li, .reveal .qm-box p { text-align: justify; }
+
+/* Appendix: compact tables (abbreviations, metrics, model fit) */
+.reveal table.dd.abbr td { padding: 6px 10px; font-size: 14px; }
+.reveal .tbl-box p { font-size: 13px; margin: 2px 0 4px 0; line-height: 1.3; }
+.reveal .tbl-box table.dd { font-size: 13px; margin-bottom: 8px; }
+.reveal .tbl-box table.dd td, .reveal .tbl-box table.dd th { padding: 3px 8px; }
+.reveal .tbl-box .subhead { margin-bottom: 4px; }
+.reveal table.dd tbody th { background: none; color: var(--purple); font-weight: 700; text-align: left; border-bottom: 1px solid var(--purple); }   /* row names (pandas index): bold, no fill */
+.reveal table.dd tr:last-child th { border-bottom: 1px solid var(--purple); }
+.reveal .tbl-wide table.dd { font-size: 15px; }
+.reveal .tbl-wide table.dd td, .reveal .tbl-wide table.dd th { padding: 5px 12px; }

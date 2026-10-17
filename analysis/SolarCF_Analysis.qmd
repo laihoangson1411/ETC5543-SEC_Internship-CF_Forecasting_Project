@@ -14,11 +14,11 @@ title: "Solar contract factor: models and FY26 test"
 
 2. Feature selection: feature sets and VIF
 
-3. Models: fit on the training years
+3. Models: fit on the training years, Linear and Ridge coefficients and residual checks
 
 4. Forecast the test year with a forecast TWAP: LGC link, forecast rows, evaluation
 
-5. Forecast plots: every model in the test year with its MAE, MAE by model, feature importance of every model and of the best models, monthly forecast of the best models
+5. Forecast plots: every model in the test year with its MAE, MAE by model, feature importance of every model and of the best models, monthly forecast of the best models, Exponential baseline vs the best model
 
 **Next.** `CF_Forecast_FY27-29.qmd` (part 4, Solar) retrains the models on FY23-26 and forecasts FY27-29.
 
@@ -65,6 +65,8 @@ from utilsPlot import (
     table_title,
     importance_bars,
     mae_ranking_table,
+    slide_table,
+    SEASON_STYLE,
 )
 from utilsData import (
     load_generation_inputs,
@@ -88,6 +90,7 @@ from utilsModels import (
     ridge_pvalues,
     p_stars,
     calculate_metrics,
+    linear_fit_checks,
 )
 
 cfg = make_cfg()
@@ -191,6 +194,24 @@ print(f"Fitted on {n_train} months (FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100}
       f"+ baselines; Ridge alpha = {fitted['Ridge']['model'].alpha_:.2f}")
 ```
 
+The linear models are the ones whose coefficients can be read as effects, so their fit is checked: the coefficients on standardised features with their p-values (Ridge: the approximate t-test of `ridge_pvalues`), the VIF of each feature, and the residual checks on the training months.
+
+```{python}
+#| label: solar-linear-fit
+# =============================================================================
+# CELL 3.2 -- Linear and Ridge: coefficients (per sd of the feature), p-values, VIF and residual checks
+# utilsModels.linear_fit_checks; Durbin-Watson: autocorrelation, Breusch-Pagan: constant variance,
+# Jarque-Bera: normal residuals.
+# =============================================================================
+
+train = df_solar[df_solar['FY'].isin(TRAIN_FYS)]
+coef_tbl, check_tbl = linear_fit_checks(fitted, train)
+table_title('Table 3.1 - SOLAR: Linear and Ridge coefficients', 'per sd of the feature; p < 0.05 = significant; VIF > 10 = strong overlap')
+display(slide_table(coef_tbl, digits=3))
+table_title('Table 3.2 - SOLAR: fit and residual checks (training months)')
+display(slide_table(check_tbl, digits=3))
+```
+
 ## 4. Forecast the test year with a forecast TWAP
 
 ### 4.1 LGC link and forecast functions
@@ -277,12 +298,9 @@ print(f'Total forecast predictions: {len(forecast_df_all):,}')
 ### 4.3 Forecast report
 
 ```{python}
+#| label: solar-metrics
 # =============================================================================
-# CELL 4.3 -- Forecast report
-#  1. Error of every method in the scenario forecast (T = forecast): n, MAE, RMSE, MAPE (%), R2.
-#  2. Mean bias (forecast - actual CF).
-#  3. Interval coverage (weather-driven models only): share of test months where the actual CF lies inside
-#     [min, max] of the historical-year predictions. Benchmark (n-1)/(n+1) for n = 3 years = 50%.
+# CELL 4.3 -- Error of every method in the scenario forecast (T = forecast): n, MAE, RMSE, MAPE (%), R2
 # =============================================================================
 
 main = agg_all[agg_all['t_source'] == T_MAIN]
@@ -295,7 +313,14 @@ metrics_tbl = pd.DataFrame(metrics_rows).T.reindex(BASELINES + MODEL_ORDER)
 metrics_tbl['n'] = metrics_tbl['n'].astype(int)
 table_title(f'Table 4.1 - Error vs the actual CF, test year FY{TEST_FYS[0] % 100}',
             f'scenario forecast with T = {T_MAIN} (median over the historical years); MAPE in %; sorted by MAE')
-display(metrics_tbl.sort_values('MAE').round(4))
+display(slide_table(metrics_tbl.sort_values('MAE'), digits=3))
+```
+
+```{python}
+# =============================================================================
+# CELL 4.4 -- Mean bias (forecast - actual CF) and interval coverage (weather-driven models only): share of test
+# months where the actual CF lies inside [min, max] of the historical-year predictions; benchmark (n-1)/(n+1) = 50%
+# =============================================================================
 
 table_title('Table 4.2 - mean bias (forecast - actual CF)', f'T = {T_MAIN}; average over the test months; > 0 means the forecast is too high')
 display(agg_all[agg_all['method'].isin(MODEL_ORDER)].groupby('method')['bias'].mean().reindex(MODEL_ORDER).to_frame('mean bias').round(3))
@@ -354,6 +379,7 @@ mae_ranking_table(mae_main, BASELINES, MODEL_ORDER)
 ### MAE by model
 
 ```{python}
+#| label: solar-mae-bars
 # =============================================================================
 # CELL 5.3 -- MAE by model (scenario forecast, T = T_MAIN), sorted from lowest to highest,
 # with the baselines as horizontal lines
@@ -382,6 +408,7 @@ plt.show()
 Feature importance of the five weather-driven models, fitted on the training years. Linear and Ridge (top row) are coefficient-based, so the **sign** is meaningful (purple = the feature raises CF, orange = it lowers it): Linear = coefficient x feature standard deviation, Ridge = coefficient on standardised features. The tree models (bottom row: RF, XGBoost) give each feature a share of the importance (>= 0, summing to 1); the Ensemble is the mean of the RF and XGBoost shares. The baselines use no weather or price feature.
 
 ```{python}
+#| label: solar-importance-all
 # =============================================================================
 # CELL 5.4 -- Feature importance of the five weather-driven models
 # utilsModels.feature_importance returns (importance, signed). Top row: linear models; bottom row: tree models.
@@ -390,7 +417,6 @@ from matplotlib.patches import Patch
 
 ['RF', 'Ridge']
 
-train = df_solar[df_solar['FY'].isin(TRAIN_FYS)]
 importance = {m: feature_importance(fitted, m, train) for m in MODEL_ORDER}
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 7))
@@ -462,5 +488,59 @@ fig.tight_layout()
 bottom_legend(fig, ncol=len(MODELS_PLOT) + 2)
 add_titles(fig, f"SOLAR monthly CF: scenario forecast of {', '.join(MODELS_PLOT)} (T = {T_MAIN})",
            'Median over the historical years; shaded = min-max range')
+plt.show()
+```
+
+### Exponential baseline vs the best model
+
+CF against TWAP, as in `EDA.qmd` (cell 3.2): the training months at their actual TWAP (faded) with the Exponential curve of each season. The test months are placed at their **forecast** TWAP `T`, the input of the scenario forecast: the actual CF (bold, with the month number) and the forecast of the best model (RF, the model used for FY27-29); the Exponential forecast lies on its curve. The box gives the MAE of both by season.
+
+```{python}
+#| label: solar-exp-vs-best
+# =============================================================================
+# CELL 5.7 -- CF vs TWAP: Exponential curves and the best model on the test year (T = T_MAIN), MAE by season
+# =============================================================================
+from matplotlib.lines import Line2D
+
+BEST_MODEL = 'RF'                          # forecast model of CF_Forecast_FY27-29.qmd (FINAL_MODEL)
+
+d = df_solar
+T = T_by_source[T_MAIN]
+test = agg_all[agg_all['t_source'] == T_MAIN].pivot(index='month', columns='method', values='pred_median').reindex(TEST_MONTHS)
+actual, season_te = d.loc[TEST_MONTHS, 'target'], d.loc[TEST_MONTHS, 'Season']
+err = test.sub(actual, axis=0).abs()
+is_train = d['FY'].isin(TRAIN_FYS)
+x_fit = np.linspace(max(d['twap'].min() * 0.85, 1), max(d['twap'].max(), T.max()) * 1.05, 300)
+
+fig, ax = plt.subplots(figsize=(7, 6))
+mae_txt = [f"{'FY' + str(TEST_FYS[0] % 100) + ' MAE':<8} {'Exp':>6} {BEST_MODEL[:6]:>6}"]
+for s, (name, c, mk) in SEASON_STYLE.items():
+    tr = is_train & (d['Season'] == s)
+    ax.scatter(d.loc[tr, 'twap'], d.loc[tr, 'target'], c=c, marker=mk, s=15, alpha=0.25, edgecolors='none')
+    ax.plot(x_fit, predict_exponential(fitted['Exponential']['model'], np.full(len(x_fit), s), x_fit), color=c, lw=1, alpha=0.6)
+    te = TEST_MONTHS[season_te.values == s]
+    for m in te:                                                   # forecast error of the best model
+        ax.plot([T[m], T[m]], [actual[m], test.loc[m, BEST_MODEL]], color='0.6', lw=0.8, zorder=3)
+    ax.scatter(T[te], test.loc[te, BEST_MODEL], marker=mk, s=40, facecolors='white', edgecolors='black', linewidths=0.9, zorder=4)
+    ax.scatter(T[te], actual[te], c=c, marker=mk, s=45, edgecolors='black', linewidths=0.8, zorder=5)
+    for m in te:
+        ax.annotate(str(m.month), (T[m], actual[m]), xytext=(4, 3), textcoords='offset points', fontsize=7, color=c)
+    mae_txt.append(f"{name:<8} {err.loc[te, 'Exponential'].mean():6.3f} {err.loc[te, BEST_MODEL].mean():6.3f}")
+mae_txt.append(f"{'Total':<8} {err['Exponential'].mean():6.3f} {err[BEST_MODEL].mean():6.3f}")
+ax.text(0.98, 0.97, '\n'.join(mae_txt), transform=ax.transAxes, ha='right', va='top', fontsize=7.5, family='monospace',
+        color='0.25', bbox=dict(facecolor='white', edgecolor='0.8', alpha=0.9))
+ax.set_xlim(x_fit[0], x_fit[-1])
+ax.set_ylim(0, max(d['target'].max(), test[BEST_MODEL].max()) * 1.1)
+ax.set(xlabel='TWAP ($/MWh); test months at their forecast TWAP', ylabel='Solar contract factor')
+
+handles = [Line2D([], [], ls='', marker=mk, mfc=c, mec='black', mew=0.5, ms=6, label=name) for name, c, mk in SEASON_STYLE.values()]
+handles += [Line2D([], [], ls='', marker='o', mfc='0.5', mec='none', alpha=0.4, ms=5, label=f'Train FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100}'),
+            Line2D([], [], ls='', marker='o', mfc='0.5', mec='black', mew=0.8, ms=6, label=f'Actual CF FY{TEST_FYS[0] % 100} (no. = month)'),
+            Line2D([], [], ls='', marker='o', mfc='white', mec='black', mew=0.9, ms=6, label=f'{BEST_MODEL} forecast'),
+            Line2D([], [], color='0.5', lw=1, label='Exponential curve')]
+fig.tight_layout()
+bottom_legend(fig, handles=handles, ncol=4)
+add_titles(fig, f'SOLAR: Exponential baseline vs {BEST_MODEL} on FY{TEST_FYS[0] % 100}',
+           f"MAE: Exponential {err['Exponential'].mean():.3f}, {BEST_MODEL} {err[BEST_MODEL].mean():.3f}")
 plt.show()
 ```

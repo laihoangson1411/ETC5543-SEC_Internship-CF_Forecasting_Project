@@ -1,0 +1,14 @@
+Abbreviation,Meaning,Abbreviation,Meaning
+CF,"Contract factor = DWAP / TWAP",MAE,Mean absolute error
+DWAP,"Generation-weighted average price, negative prices floored at $0",RMSE,Root mean squared error
+TWAP,Time-weighted average price (monthly mean of the half-hourly price),MAPE,Mean absolute percentage error
+VIC1,Victorian price region of the NEM,R²,Coefficient of determination
+NEM,National Electricity Market,VIF,Variance inflation factor
+VRET,Victorian Renewable Energy Target (SEC's wind and solar contracts),RF,Random forest
+SEC,State Electricity Commission of Victoria,XGBoost,Extreme gradient boosting
+LGC,Large-scale Generation Certificate,QM,Quantile mapping
+MLF,Marginal loss factor,GHI,Global horizontal irradiance
+DUID,AEMO identifier of a generating unit,DNI,Direct normal irradiance
+FY,"Financial year, July to June (FY26 = Jul 2025 - Jun 2026)",IDA,Initial data analysis
+HH,Half-hour (the 30-minute interval of the price and generation data),EDA,Exploratory data analysis
+ASX,Australian Securities Exchange (adjusted monthly price forecast),AEMO,Australian Energy Market Operator

@@ -91,7 +91,7 @@ Exponential relationships fit between VIC1Price TWAP and CF, separately for each
 ## Assets & Stations
 
 ```{python}
-dictionary_table('data/dictionary/assets_stations.csv')
+dictionary_table("data/dictionary/assets_stations.csv")
 ```
 
 <p class="foot">We model CF at portfolio level (wind and solar), not asset by asset</p>
@@ -172,6 +172,9 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 
 ## Model Summary
 
+```{python}
+dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd models')
+```
 
 # Results
 

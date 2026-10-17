@@ -1,0 +1,10 @@
+Model,Why this model,Parameters
+Seasonal Naive,"Simplest baseline: any model must beat ""same month last year"".",None.
+Exponential,"The current method used by the team, so it is the benchmark to improve on.","CF = f(TWAP) with a and b per season (curve_fit), because the TWAP-CF link differs by season."
+Linear,Transparent: coefficients show how each input moves CF.,None (least squares).
+Ridge,"Linear model with shrinkage: inputs are correlated (e.g. twap_neg, month_cos) and there are only 36 training months.","alpha = 10 (WIND)/ 1 (SOLAR), chosen by RidgeCV (15 values, 1-100) on FY23-25 only.
+A larger alpha means stronger shrinkage and a more stable fit."
+RandomForest,Captures non-linear effects and price-weather interactions without scaling the inputs.,"n_estimators = 300, max_depth = 4, min_samples_leaf = 2. Shallow trees and a minimum leaf size limit overfitting on 36 rows. 300 trees give a stable average."
+XGBoost,Boosted trees: non-linear like RF but learns from earlier errors.,"n_estimators = 250, max_depth = 3, learning_rate = 0.05, subsample = 1.0, colsample_bytree = 1.0, reg_lambda = 1.0.
+Small steps, shallow trees and random sampling keep it regularised."
+Ensemble,Averaging two different tree models reduces the error of each one.,Mean of the RF and XGBoost predictions.

@@ -144,13 +144,14 @@ def _cell_html(text):
     return '<br>'.join(lines)
 
 
-def dictionary_table(path, css_class='dd'):
+def dictionary_table(path, bold_cols=2, css_class='dd'):
     """Data-dictionary table of the slides, read from a CSV file (the style is in css/presentation.css).
 
     The CSV stays plain text:
       - an empty header extends the header on its left (colspan);
       - an empty cell extends the cell above it (rowspan), e.g. the group name is written once;
-      - the first two columns are the group and the ID (bold, classes grp and id).
+      - the first `bold_cols` columns are bold: by default the group and the ID (classes grp and id);
+        bold_cols=1 for a table whose first column is the only label (e.g. the model summary).
     """
     with open(path, newline='', encoding='utf-8') as f:
         header, *rows = csv.reader(f)
@@ -173,7 +174,7 @@ def dictionary_table(path, css_class='dd'):
             if i == 0 or row[j].strip():
                 top = i
             span[top][j] += 1
-    cls = {0: ' class="grp"', 1: ' class="id"'}
+    cls = {j: ' class="grp"' if j == 0 else ' class="id"' for j in range(bold_cols)}
     for i, row in enumerate(rows):
         cells = []
         for j in range(n_cols):

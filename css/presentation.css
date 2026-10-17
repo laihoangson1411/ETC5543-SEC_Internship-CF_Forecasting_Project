@@ -41,6 +41,7 @@
 .reveal table.dd td.id { font-weight: 700; }
 .reveal table.dd ul { margin: 0 0 0 16px; }
 .reveal table.dd li { margin: 0 0 4px 0; }
+.reveal table.dd.models td.grp { white-space: nowrap; }      /* model summary: model names on one line */
 .reveal .slides section p.foot { font-size: 15px; margin-top: 22px; }
 
 /* Full-slide picture (workflow, forecasting method): centred in the space below the slide title */

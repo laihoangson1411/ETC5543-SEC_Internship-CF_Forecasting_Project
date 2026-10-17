@@ -25,7 +25,7 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   ├── processed/               # written by the analysis notebooks
 │   │   ├── HistoricContractFactors.csv        <- IDA_ContractFactors.qmd
 │   │   └── QM_HistoricWeather_30min.csv       <- Wind_QuantileMapping.qmd
-│   └── forecast/                # FY27-29_<Model>.csv <- CF_Forecast_FY27-29.qmd (wind and solar rows)
+│   └── forecast/                # FY27-29_CF_Forecast.csv <- CF_Forecast_FY27-29.qmd (chosen model of wind and solar)
 ├── functions/                   # Python modules shared by the notebooks
 │   ├── utilsConfig.py           # paths and the shared configuration (cfg): window, assets, stations, features, models
 │   ├── utilsData.py             # loading generation and weather, monthly feature helpers
@@ -74,7 +74,7 @@ quarto render analysis/WindCF_Analysis.qmd      # or a single file
 | 4 | `analysis/EDA.qmd` | CF drivers, Exponential baseline, LGC and negative prices | - |
 | 5 | `analysis/WindCF_Analysis.qmd` | Wind models, FY26 test with the scenario forecast | - |
 | 6 | `analysis/SolarCF_Analysis.qmd` | Solar models, FY26 test with the scenario forecast | - |
-| 7 | `analysis/CF_Forecast_FY27-29.qmd` | Retrain on FY23-26 and forecast FY27-29 | `data/forecast/FY27-29_<Model>.csv` |
+| 7 | `analysis/CF_Forecast_FY27-29.qmd` | Retrain on FY23-26 and forecast FY27-29 (Ensemble for wind, RF for solar) | `data/forecast/FY27-29_CF_Forecast.csv` |
 | 8 | `report.qmd`, `presentation.qmd` | Report and slides | - |
 
 The settings shared by the notebooks (analysis window, train/test years, assets, weather stations, features and model parameters) are in `functions/utilsConfig.py`.

@@ -76,11 +76,12 @@ editor: visual
 # CELL: Set-up
 # The report reads the results written by the analysis notebooks (render them first, see README.md):
 #   monthly_cf  monthly contract factors (data/processed/HistoricContractFactors.csv, IDA_ContractFactors.qmd)
-#   forecasts   FY27-29 forecast of each model (data/forecast/FY27-29_<Model>.csv, CF_Forecast_FY27-29.qmd)
+#   forecast    FY27-29 forecast of the chosen model of each portfolio (data/forecast/FY27-29_CF_Forecast.csv,
+#               CF_Forecast_FY27-29.qmd)
 # The configuration and the plot style are the ones of the notebooks (functions/utilsConfig.py, functions/utilsPlot.py).
 # =============================================================================
 
-import glob, os, sys, warnings
+import os, sys, warnings
 
 import numpy as np
 import pandas as pd
@@ -108,10 +109,7 @@ set_style(small_fonts=True)
 monthly_cf = add_calendar_features(
     pd.read_csv(cfg["cf_csv"], index_col=0, parse_dates=True)
 )
-forecasts = {
-    os.path.basename(p)[len("FY27-29_") : -len(".csv")]: pd.read_csv(
-        p, parse_dates=["Time-ending"]
-    )
-    for p in sorted(glob.glob(os.path.join(FORECAST_DIR, "FY27-29_*.csv")))
-}
+forecast = pd.read_csv(
+    os.path.join(FORECAST_DIR, "FY27-29_CF_Forecast.csv"), parse_dates=["Time-ending"]
+)
 ```

@@ -11,8 +11,9 @@ scikit-learn==1.9.1
 statsmodels==0.15.0
 xgboost==3.2.0
 
-# Plots
+# Plots and map
 matplotlib==3.10.9
+folium==0.20.0
 
 # Jupyter kernel used by `quarto render`
 jupyter==1.1.1

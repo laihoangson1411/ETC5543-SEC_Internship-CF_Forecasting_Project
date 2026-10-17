@@ -16,14 +16,14 @@ title: "Exploratory data analysis and LGC"
 
 4. LGC price: series, negative-price severity, link to negative-price depth, shrink factor
 
-**Inputs.** `data/raw/` (generation, weather, exclusion periods, LGC, 30-min price forecast) and `data/processed/` (quantile-mapped wind speed from `Wind_QuantileMapping.qmd`, solar proxy from `SolarProxy_Cal.qmd`). Nothing is saved: this file is for looking, not for producing data.
+**Inputs.** `data/raw/` (generation, weather, exclusion periods, LGC, 30-min price forecast) and `data/processed/` (monthly contract factors from `IDA_ContractFactors.qmd`, quantile-mapped wind speed from `Wind_QuantileMapping.qmd`). Nothing is saved: this file is for looking, not for producing data.
 
 ## 1. Set-up
 
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (utilsConfig.py) and loads the data.
 #  - generation (MLF- and capacity-scaled) and half-hourly weather come from utilsData
 #    (wind speed uses the quantile-mapped file written by Wind_QuantileMapping.qmd)
 #  - T_forecast: monthly TWAP of the VIC 30-min price forecast (the forecast TWAP)
@@ -38,39 +38,72 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
-from utilsPlot import (PURPLE, ORANGE, SEASON_STYLE, CORR_CMAP, set_style, add_titles, table_title,
-                       fy_separators, annotated_heatmap)
+from utilsConfig import DATA_DIR, make_cfg
+from utilsPlot import (
+    PURPLE,
+    ORANGE,
+    SEASON_STYLE,
+    CORR_CMAP,
+    set_style,
+    add_titles,
+    table_title,
+    fy_separators,
+    annotated_heatmap,
+)
 from utilsContractFactors import getFY, expfunctionCF
-from utilsData import (load_generation_inputs, load_weather_history, add_calendar_features,
-                       monthly_station_mean, build_twap_split_monthly, month_start)
-from utilsScenario import load_forecast_twap_monthly, load_lgc_monthly, fit_depth_model, shrink_factor
+from utilsData import (
+    load_generation_inputs,
+    load_weather_history,
+    add_calendar_features,
+    monthly_station_mean,
+    build_twap_split_monthly,
+    month_start,
+)
+from utilsScenario import (
+    load_forecast_twap_monthly,
+    load_lgc_monthly,
+    fit_depth_model,
+    shrink_factor,
+)
 from utilsModels import fit_exponential, calculate_metrics, predict_exponential
 
 cfg = make_cfg()
-np.random.seed(cfg['random_seed'])
-set_style(small_fonts=True, **{'axes.grid': False})      # this file draws without grid lines
+np.random.seed(cfg["random_seed"])
+set_style(
+    small_fonts=True, **{"axes.grid": False}
+)  # this file draws without grid lines
 
-gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
-weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=True)    # wind speed: quantile-mapped
-price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
+gen_scaled, _, _ = load_generation_inputs(
+    cfg, DATA_DIR
+)  # only the half-hourly VIC1 price is used
+weather_hh, _ = load_weather_history(
+    cfg, DATA_DIR, apply_qm=True
+)  # wind speed: quantile-mapped
+price_hh = gen_scaled["VIC1Price"]  # half-hourly VIC1 price ($/MWh)
 
 # Price forecast -> monthly TWAP (the forecast T)
-T_forecast = load_forecast_twap_monthly(cfg['price_forecast_csv'])
-print(f'Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}')
+T_forecast = load_forecast_twap_monthly(cfg["price_forecast_csv"])
+print(
+    f"Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}"
+)
 
-lgc_m = load_lgc_monthly(cfg['lgc_csv'])                              # monthly LGC price, month-start index
-print(f'LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}')
+lgc_m = load_lgc_monthly(cfg["lgc_csv"])  # monthly LGC price, month-start index
+print(f"LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}")
 
-print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+print(
+    f"Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols"
+)
 ```
 
 ```{python}
@@ -81,13 +114,12 @@ print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {w
 # portfolio's stations and CF_lag12 (Seasonal Naive).
 #  monthly_target  monthly CF and TWAP of every asset and portfolio (HistoricContractFactors.csv) + calendar features
 #  wind weather    wind_speed_kph, temp_c, rh, dp_c, rainfall_mm (mean of the wind stations)
-#  solar weather   ghi, dni, air_temp_c (mean of the solar stations); solar_proxy and solar_share from SolarProxy.csv
+#  solar weather   ghi, dni, air_temp_c (mean of the solar stations)
 #  Empty negative / positive bucket: NaN for wind, 0 for solar
 # =============================================================================
 
 monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
 monthly_target = add_calendar_features(monthly_target)                          # month_sin/cos, FY, Season
-proxy_features = pd.read_csv(os.path.join(DATA_DIR, 'processed', 'SolarProxy.csv'), index_col=0, parse_dates=True)
 
 
 def build_feature_table(portfolio, fill_empty, stations, weather_cols):
@@ -106,8 +138,6 @@ def build_feature_table(portfolio, fill_empty, stations, weather_cols):
 
 df_wind = build_feature_table('WIND', False, cfg['wind_stations'], ['wind_speed_kph', 'temp_c', 'rh', 'dp_c', 'rainfall_mm'])
 df_solar = build_feature_table('SOLAR', True, cfg['solar_stations'], ['ghi', 'dni', 'air_temp_c'])
-df_solar['solar_proxy'] = proxy_features['proxy_solar'].reindex(df_solar.index)
-df_solar['solar_share'] = proxy_features['solar_share'].reindex(df_solar.index)
 
 TRAIN_FYS = cfg['train_fys']
 TEST_FYS = cfg['test_fys']
@@ -160,8 +190,7 @@ The correlations use the **training years only**, so the test year does not infl
 HEATMAP_COLS = {
     'WIND': ['WIND_CF', 'twap', 'twap_pos', 'twap_neg', 'wind_speed_kph', 'temp_c', 'rh',
              'dp_c', 'rainfall_mm', 'month_sin', 'month_cos'],
-    'SOLAR': ['SOLAR_CF', 'twap', 'twap_pos', 'twap_neg', 'ghi', 'dni', 'air_temp_c',
-              'solar_proxy', 'solar_share', 'month_sin', 'month_cos'],
+    'SOLAR': ['SOLAR_CF', 'twap', 'twap_pos', 'twap_neg', 'ghi', 'dni', 'air_temp_c', 'month_sin', 'month_cos'],
 }
 
 # Colours: CORR_CMAP from utilsPlot (orange = negative, purple = positive), as in IDA_Weather_SolarIrradiance.qmd

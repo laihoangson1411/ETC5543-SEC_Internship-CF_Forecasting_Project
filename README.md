@@ -18,16 +18,16 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   │   ├── HistoricLGCPrice.csv               (20260424_HistoricLGCPrice.csv)
 │   │   ├── HistoricSolarIrradiance_30min.csv  (solcast_hist_30min.csv)
 │   │   ├── HistoricWeather_30min.csv          (dtn_hist_30min.csv)
+│   │   ├── Locations.csv                      coordinates of the weather stations and farms
 │   │   ├── MLF_FY23-26.csv                    (AEMO_VICMLF_FY23-26.csv)
 │   │   ├── PriceForecast_30min.csv            (VIC_Central_30min_PriceForecast.csv), time-ending
 │   │   └── PriceForecast_Month.csv            (20261001_ASXadjustedPrice.csv)
 │   ├── processed/               # written by the analysis notebooks
 │   │   ├── HistoricContractFactors.csv        <- IDA_ContractFactors.qmd
-│   │   ├── QM_HistoricWeather_30min.csv       <- Wind_QuantileMapping.qmd
-│   │   └── SolarProxy.csv                     <- SolarProxy_Cal.qmd
+│   │   └── QM_HistoricWeather_30min.csv       <- Wind_QuantileMapping.qmd
 │   └── forecast/                # FY27-29_<Model>.csv <- CF_Forecast_FY27-29.qmd (wind and solar rows)
 ├── functions/                   # Python modules shared by the notebooks
-│   ├── config.py                # paths and the shared configuration (cfg): window, assets, stations, features, models
+│   ├── utilsConfig.py           # paths and the shared configuration (cfg): window, assets, stations, features, models
 │   ├── utilsData.py             # loading generation and weather, monthly feature helpers
 │   ├── utilsContractFactors.py  # contract factor calculation
 │   ├── utilsGeneration.py       # commissioning and exclusion periods
@@ -38,7 +38,6 @@ ETC5543-SEC_Internship-CF_Forecasting_Project/
 │   ├── IDA_ContractFactors.qmd
 │   ├── IDA_Weather_SolarIrradiance.qmd
 │   ├── Wind_QuantileMapping.qmd
-│   ├── SolarProxy_Cal.qmd
 │   ├── EDA.qmd
 │   ├── WindCF_Analysis.qmd
 │   ├── SolarCF_Analysis.qmd
@@ -72,14 +71,13 @@ quarto render analysis/WindCF_Analysis.qmd      # or a single file
 | 1 | `analysis/IDA_ContractFactors.qmd` | Monthly CF of every asset and portfolio, data checks | `data/processed/HistoricContractFactors.csv` |
 | 2 | `analysis/IDA_Weather_SolarIrradiance.qmd` | Choice of weather stations and variables, data quality | - |
 | 3 | `analysis/Wind_QuantileMapping.qmd` | Correction of the corrupted DTN wind speed (Oct 2025 - Apr 2026) | `data/processed/QM_HistoricWeather_30min.csv` |
-| 4 | `analysis/SolarProxy_Cal.qmd` | Price-weighted solar proxy (used by the EDA) | `data/processed/SolarProxy.csv` |
-| 5 | `analysis/EDA.qmd` | CF drivers, Exponential baseline, LGC and negative prices | - |
-| 6 | `analysis/WindCF_Analysis.qmd` | Wind models, FY26 test with the scenario forecast | - |
-| 7 | `analysis/SolarCF_Analysis.qmd` | Solar models, FY26 test with the scenario forecast | - |
-| 8 | `analysis/CF_Forecast_FY27-29.qmd` | Retrain on FY23-26 and forecast FY27-29 | `data/forecast/FY27-29_<Model>.csv` |
-| 9 | `report.qmd`, `presentation.qmd` | Report and slides | - |
+| 4 | `analysis/EDA.qmd` | CF drivers, Exponential baseline, LGC and negative prices | - |
+| 5 | `analysis/WindCF_Analysis.qmd` | Wind models, FY26 test with the scenario forecast | - |
+| 6 | `analysis/SolarCF_Analysis.qmd` | Solar models, FY26 test with the scenario forecast | - |
+| 7 | `analysis/CF_Forecast_FY27-29.qmd` | Retrain on FY23-26 and forecast FY27-29 | `data/forecast/FY27-29_<Model>.csv` |
+| 8 | `report.qmd`, `presentation.qmd` | Report and slides | - |
 
-The settings shared by the notebooks (analysis window, train/test years, assets, weather stations, features and model parameters) are in `functions/config.py`.
+The settings shared by the notebooks (analysis window, train/test years, assets, weather stations, features and model parameters) are in `functions/utilsConfig.py`.
 
 ## Notes on reproducibility
 

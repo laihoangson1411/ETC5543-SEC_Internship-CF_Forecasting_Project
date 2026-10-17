@@ -33,12 +33,12 @@ BASE_CFG = {
     'station_ids': [85280, 86338, 89002],         # stations read from the weather files
     'wind_stations': [86338, 89002],              # DTN stations averaged into the monthly wind features (IDA_Weather)
     'solar_stations': [85280, 86338, 89002],      # Solcast stations averaged into the monthly solar features (IDA_Weather)
-    'solar_proxy_station': 85280,                 # single GHI station used for the solar proxy
     'weather_interp_limit': 2,                    # max consecutive 30-min gaps to interpolate
     'corruption_window': ('2025-10-07', '2026-04-14'),   # DTN wind speed is squashed here (Wind_QuantileMapping.qmd)
 
     # Input and output files
     'wind_csv': os.path.join(RAW_DIR, 'HistoricWeather_30min.csv'),            # raw DTN weather (not QM)
+    'locations_csv': os.path.join(RAW_DIR, 'Locations.csv'),                   # coordinates of the stations and farms
     'cf_csv': os.path.join(PROCESSED_DIR, 'HistoricContractFactors.csv'),      # monthly CF (IDA_ContractFactors.qmd)
     'lgc_csv': os.path.join(RAW_DIR, 'HistoricLGCPrice.csv'),                  # monthly LGC price, history
     'lgc_fc_csv': os.path.join(RAW_DIR, 'ForecastedLGCPrice.csv'),             # LGC price, forecast

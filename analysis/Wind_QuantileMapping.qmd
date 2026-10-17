@@ -39,7 +39,7 @@ Loads the data and prepares the tables and helper functions that every later ste
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (utilsConfig.py) and loads the data.
 # Generation (MLF- and capacity-scaled) and half-hourly weather come from utilsData.
 # apply_qm=False: this file needs the RAW DTN wind speed, because it creates the QM file.
 # =============================================================================
@@ -51,25 +51,30 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
+from utilsConfig import DATA_DIR, make_cfg
 from utilsPlot import GREY, ORANGE, PURPLE, add_titles, table_title
 from utilsData import load_generation_inputs, load_weather_history
 
-cfg = make_cfg()        # cfg['wind_csv'] is the raw DTN weather (not QM)
+cfg = make_cfg()  # cfg['wind_csv'] is the raw DTN weather (not QM)
 
 gen_scaled, _, vret_capacity = load_generation_inputs(cfg, DATA_DIR)
 weather_hh, weather_raw = load_weather_history(cfg, DATA_DIR, apply_qm=False)
 
-print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
-print(f'Period: {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
+print(
+    f"Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols"
+)
+print(f"Period: {gen_scaled.index.min()} -> {gen_scaled.index.max()}")
 ```
 
 ### 1.2 Build the half-hourly table `hh`

@@ -16,7 +16,7 @@ Imports, the configuration and the half-hourly generation and price from `utilsD
 # =============================================================================
 # CELL 1.1 -- Imports, configuration, loading and plot helpers
 #   add_check   record one check for the summary table in §5.5
-# Configuration (config.make_cfg) and plot helpers / colours (utilsPlot) are shared by every notebook.
+# Configuration (utilsConfig.make_cfg) and plot helpers / colours (utilsPlot) are shared by every notebook.
 # Colours: portfolios are purple (wind) and orange (solar); every single asset has its own colour,
 # the same in every figure.
 # =============================================================================
@@ -28,36 +28,58 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
-from utilsPlot import GREY, PURPLE, ORANGE, ASSET_COLORS, add_titles, table_title, fy_separators
+from utilsConfig import DATA_DIR, make_cfg
+from utilsPlot import (
+    GREY,
+    PURPLE,
+    ORANGE,
+    ASSET_COLORS,
+    add_titles,
+    table_title,
+    fy_separators,
+)
 from utilsContractFactors import aggregateContractFactorsByGenType
 from utilsData import load_generation_inputs, build_targets, month_start
 
 cfg = make_cfg()
-all_assets = cfg['wind_assets'] + cfg['solar_assets']
+all_assets = cfg["wind_assets"] + cfg["solar_assets"]
 
 gen_scaled, vret, capacity = load_generation_inputs(cfg, DATA_DIR)
-print(f'\nGeneration table: {gen_scaled.shape[0]:,} half-hours, {gen_scaled.index.min()} -> {gen_scaled.index.max()}')
+print(
+    f"\nGeneration table: {gen_scaled.shape[0]:,} half-hours, {gen_scaled.index.min()} -> {gen_scaled.index.max()}"
+)
 
 # Colour of every asset and portfolio (wind assets and solar assets each use the asset palette in their own panel)
-COLOR = {**dict(zip(cfg['wind_assets'], ASSET_COLORS)),
-         **dict(zip(cfg['solar_assets'], ASSET_COLORS)),
-         'WIND': PURPLE, 'SOLAR': ORANGE}
+COLOR = {
+    **dict(zip(cfg["wind_assets"], ASSET_COLORS)),
+    **dict(zip(cfg["solar_assets"], ASSET_COLORS)),
+    "WIND": PURPLE,
+    "SOLAR": ORANGE,
+}
 
-checks = []   # filled by add_check, shown in §5.5
+checks = []  # filled by add_check, shown in §5.5
+
 
 def add_check(name, n_problems, info=False):
     """Record a check. Status: OK (0 problems), CHECK (problems found), INFO (expected, good to know)."""
-    checks.append({'check': name, 'count': int(n_problems),
-                   'status': 'OK' if n_problems == 0 else ('INFO' if info else 'CHECK')})
+    checks.append(
+        {
+            "check": name,
+            "count": int(n_problems),
+            "status": "OK" if n_problems == 0 else ("INFO" if info else "CHECK"),
+        }
+    )
 ```
 
 ## 2. Monthly contract factors

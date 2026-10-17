@@ -2,14 +2,14 @@
 title: "Initial data analysis: weather and solar irradiance"
 ---
 
-**Goal.** Before any weather variable is used, check that the two weather sources can be trusted and decide which **stations** and which **variables** go into the next steps (`Wind_QuantileMapping.qmd`, `SolarProxy_Cal.qmd`, `EDA.qmd` and the models).
+**Goal.** Before any weather variable is used, check that the two weather sources can be trusted and decide which **stations** and which **variables** go into the next steps (`Wind_QuantileMapping.qmd`, `EDA.qmd` and the models).
 
 **Sources.** DTN weather (temperature, dew point, humidity, wind speed, gust, direction, rainfall, pressure and more) and Solcast solar irradiance (GHI, DNI, air temperature), each for stations 85280, 86338 and 89002, every 30 minutes. Every numeric variable of the two files is read and checked.
 
 **Flow**
 
 1. Set-up: load the raw files and the generation, with no interpolation so that gaps stay visible
-2. Which stations: correlation of each station with the generation
+2. Which stations: where the stations are compared with the farms, then the correlation of each station with the generation
 3. The corrupted wind speed: the known problem of the DTN wind speed, corrected in the next files
 4. Data quality: missing data in every variable
 5. Which variables: the variables kept for the next steps
@@ -36,25 +36,37 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
-from utilsPlot import GREY, PURPLE, ORANGE, CORR_CMAP, set_style, add_titles, table_title, annotated_heatmap
+from utilsConfig import DATA_DIR, make_cfg
+from utilsPlot import (
+    GREY,
+    PURPLE,
+    ORANGE,
+    CORR_CMAP,
+    set_style,
+    add_titles,
+    table_title,
+    annotated_heatmap,
+)
 from utilsData import load_generation_inputs, to_naive_timestamp
 
-# wind_stations / solar_stations are the stations chosen in section 2 (set in config.py);
+# wind_stations / solar_stations are the stations chosen in section 2 (set in utilsConfig.py);
 # corruption_window is the squashed DTN wind speed found in Wind_QuantileMapping.qmd
 cfg = make_cfg()
-STATIONS = cfg['station_ids']
-all_assets = cfg['wind_assets'] + cfg['solar_assets']
-START, END = pd.Timestamp(cfg['analysis_start']), pd.Timestamp(cfg['analysis_end'])
-GRID = pd.date_range(START, END, freq='30min')           # every half-hour that should exist
+STATIONS = cfg["station_ids"]
+all_assets = cfg["wind_assets"] + cfg["solar_assets"]
+START, END = pd.Timestamp(cfg["analysis_start"]), pd.Timestamp(cfg["analysis_end"])
+GRID = pd.date_range(START, END, freq="30min")  # every half-hour that should exist
 
 
 def load_raw_station_file(path, station_col, time_col):
@@ -66,43 +78,66 @@ def load_raw_station_file(path, station_col, time_col):
         stats: DataFrame by station with the rows read, duplicated timestamps and timestamps off the 30-minute grid.
         variables: list of the numeric variables found in the file.
     """
-    raw = pd.read_csv(path).rename(columns={station_col: 'station', time_col: 'ts'})
-    raw['ts'] = to_naive_timestamp(raw['ts'])
-    raw['station'] = pd.to_numeric(raw['station'], errors='coerce')
-    others = [c for c in raw.columns if c not in ('station', 'ts')]
-    numeric = raw[others].apply(pd.to_numeric, errors='coerce')                 # text becomes NaN
-    variables = [c for c in others if numeric[c].notna().any()]                 # numeric columns only
-    print(f'{os.path.basename(path)}: {len(variables)} numeric variables; not read: {[c for c in others if c not in variables]}')
+    raw = pd.read_csv(path).rename(columns={station_col: "station", time_col: "ts"})
+    raw["ts"] = to_naive_timestamp(raw["ts"])
+    raw["station"] = pd.to_numeric(raw["station"], errors="coerce")
+    others = [c for c in raw.columns if c not in ("station", "ts")]
+    numeric = raw[others].apply(pd.to_numeric, errors="coerce")  # text becomes NaN
+    variables = [c for c in others if numeric[c].notna().any()]  # numeric columns only
+    print(
+        f"{os.path.basename(path)}: {len(variables)} numeric variables; not read: {[c for c in others if c not in variables]}"
+    )
     raw[variables] = numeric[variables]
-    raw = raw[raw['station'].isin(STATIONS) & raw['ts'].between(START, END)]
-    by_station = raw['station']
-    stats = pd.DataFrame({'rows': raw.groupby('station').size(),
-                          'duplicated timestamps': raw.duplicated(['station', 'ts']).groupby(by_station).sum(),
-                          'off the 30-min grid': (~raw['ts'].isin(GRID)).groupby(by_station).sum()})
-    wide = (raw.drop_duplicates(['station', 'ts'], keep='last')
-               .pivot(index='ts', columns='station', values=variables).reindex(GRID))
-    wide.columns = [f'{v}_{s}' for v, s in wide.columns]
+    raw = raw[raw["station"].isin(STATIONS) & raw["ts"].between(START, END)]
+    by_station = raw["station"]
+    stats = pd.DataFrame(
+        {
+            "rows": raw.groupby("station").size(),
+            "duplicated timestamps": raw.duplicated(["station", "ts"])
+            .groupby(by_station)
+            .sum(),
+            "off the 30-min grid": (~raw["ts"].isin(GRID)).groupby(by_station).sum(),
+        }
+    )
+    wide = (
+        raw.drop_duplicates(["station", "ts"], keep="last")
+        .pivot(index="ts", columns="station", values=variables)
+        .reindex(GRID)
+    )
+    wide.columns = [f"{v}_{s}" for v, s in wide.columns]
     return wide, stats, variables
 
 
-dtn, dtn_stats, DTN_VARS = load_raw_station_file(os.path.join(DATA_DIR, 'raw', 'HistoricWeather_30min.csv'),
-                                                 'related_location', 'obs_time_local')
-sol, sol_stats, SOL_VARS = load_raw_station_file(os.path.join(DATA_DIR, 'raw', 'HistoricSolarIrradiance_30min.csv'),
-                                                 'station_number', 'timestamp_local')
+dtn, dtn_stats, DTN_VARS = load_raw_station_file(
+    os.path.join(DATA_DIR, "raw", "HistoricWeather_30min.csv"),
+    "related_location",
+    "obs_time_local",
+)
+sol, sol_stats, SOL_VARS = load_raw_station_file(
+    os.path.join(DATA_DIR, "raw", "HistoricSolarIrradiance_30min.csv"),
+    "station_number",
+    "timestamp_local",
+)
 wx = dtn.join(sol)
 
 gen_scaled, _, capacity = load_generation_inputs(cfg, DATA_DIR)
 gen = gen_scaled[all_assets].reindex(GRID)
-wind_gen = gen[cfg['wind_assets']].sum(axis=1, min_count=1)      # wind portfolio, MWh per half-hour
-solar_gen = gen[cfg['solar_assets']].sum(axis=1, min_count=1)    # solar portfolio
+wind_gen = gen[cfg["wind_assets"]].sum(
+    axis=1, min_count=1
+)  # wind portfolio, MWh per half-hour
+solar_gen = gen[cfg["solar_assets"]].sum(axis=1, min_count=1)  # solar portfolio
 
 # Half-hours inside the corrupted window (the end day is included)
-w0, w1 = (pd.Timestamp(d) for d in cfg['corruption_window'])
+w0, w1 = (pd.Timestamp(d) for d in cfg["corruption_window"])
 in_window = pd.Series((GRID >= w0) & (GRID < w1 + pd.Timedelta(days=1)), index=GRID)
-daytime = wx[[f'ghi_{s}' for s in STATIONS]].max(axis=1) > 5     # some station sees the sun (GHI above 5 W/m2)
+daytime = (
+    wx[[f"ghi_{s}" for s in STATIONS]].max(axis=1) > 5
+)  # some station sees the sun (GHI above 5 W/m2)
 
-print(f'\nGrid: {len(GRID):,} half-hours, {START:%Y-%m-%d} -> {END:%Y-%m-%d}')
-print(f'Weather columns: {wx.shape[1]} ({len(DTN_VARS)} DTN + {len(SOL_VARS)} Solcast variables x {len(STATIONS)} stations)')
+print(f"\nGrid: {len(GRID):,} half-hours, {START:%Y-%m-%d} -> {END:%Y-%m-%d}")
+print(
+    f"Weather columns: {wx.shape[1]} ({len(DTN_VARS)} DTN + {len(SOL_VARS)} Solcast variables x {len(STATIONS)} stations)"
+)
 ```
 
 ```{python}
@@ -120,13 +155,74 @@ set_style()
 
 ## 2. Which stations
 
-Each asset is compared with the weather of each station, half-hour by half-hour (Pearson correlation). Table 2.1 is wind speed against the generation of each wind farm and of the wind portfolio, using every half-hour with generation (the corrupted wind speed is looked at in section 3). Table 2.2 is GHI against the generation of each solar farm and of the solar portfolio, using daytime half-hours only (GHI above 5 W/m²), so that the night does not inflate the correlation. Fig 2.1 shows the same numbers as heatmaps.
+Two steps: where the weather stations are compared with the farms (2.1), then how closely the weather of each station follows the generation of each farm (2.2). The distance is a first guide, the correlation decides: a nearby station usually sees the same weather, but a station further away can still follow the farms if the weather systems reach both.
+
+### 2.1 Location of the stations and the farms
+
+Fig 2.1 is an interactive map of the three weather stations (red) and of the wind (blue) and solar (orange) farms; hover over a marker for its name. Table 2.1 gives the straight-line distance from every farm to every station, and the nearest station of each farm. The coordinates are in `data/raw/Locations.csv`.
+
+```{python}
+# =============================================================================
+# CELL 2.1 -- Map of the weather stations and the farms
+# locations  one row per station or farm: id, name, type, lat, lon (data/raw/Locations.csv)
+# =============================================================================
+import folium
+
+locations = pd.read_csv(cfg['locations_csv'], dtype={'id': str})
+MARKER = {'Weather station': ('red', 'cloud', 'fa'),      # type -> (colour, icon, icon set)
+          'Wind farm': ('blue', 'flag', 'fa'),
+          'Solar farm': ('orange', 'sun', 'fa')}
+
+fmap = folium.Map(location=[locations['lat'].mean(), locations['lon'].mean()], zoom_start=7, tiles='OpenStreetMap')
+for _, r in locations.iterrows():
+    colour, icon, prefix = MARKER[r['type']]
+    folium.Marker([r['lat'], r['lon']], tooltip=f"{r['id']} - {r['name']}", popup=f"{r['type']}: {r['name']}",
+                  icon=folium.Icon(color=colour, icon=icon, prefix=prefix)).add_to(fmap)
+
+table_title('Fig 2.1 - Weather stations (red), wind farms (blue) and solar farms (orange)')
+display(fmap)
+```
+
+```{python}
+# =============================================================================
+# CELL 2.2 -- Distance from every farm to every weather station
+# Great-circle (haversine) distance in km between the coordinates of cell 2.1.
+# =============================================================================
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance in km between two points (or arrays of points) given in degrees."""
+    lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 6371 * 2 * np.arcsin(np.sqrt(a))
+
+
+stations_loc = locations[locations['type'] == 'Weather station'].set_index('id')
+farms_loc = locations[locations['type'] != 'Weather station'].set_index('id')
+station_ids = [str(s) for s in STATIONS]
+
+dist = pd.DataFrame({s: haversine_km(farms_loc['lat'], farms_loc['lon'], stations_loc.loc[s, 'lat'], stations_loc.loc[s, 'lon'])
+                     for s in station_ids})
+dist['nearest station'] = dist[station_ids].idxmin(axis=1)
+dist.insert(0, 'type', farms_loc['type'])
+dist.insert(0, 'name', farms_loc['name'])
+
+mean_by_type = dist.groupby('type')[station_ids].mean()
+note = '; '.join(f"{t.lower()}s: closest on average {mean_by_type.loc[t].idxmin()} ({mean_by_type.loc[t].min():.0f} km), "
+                 f"furthest {mean_by_type.loc[t].idxmax()} ({mean_by_type.loc[t].max():.0f} km)" for t in mean_by_type.index)
+table_title('Table 2.1 - Distance from each farm to each weather station (km)',
+            'Stations: ' + ', '.join(f"{s} {stations_loc.loc[s, 'name']}" for s in station_ids) + f'. {note}')
+display(dist.round(0))
+```
+
+### 2.2 Correlation with the generation
+
+Each asset is compared with the weather of each station, half-hour by half-hour (Pearson correlation). Table 2.2 is wind speed against the generation of each wind farm and of the wind portfolio, using every half-hour with generation (the corrupted wind speed is looked at in section 3). Table 2.3 is GHI against the generation of each solar farm and of the solar portfolio, using daytime half-hours only (GHI above 5 W/m²), so that the night does not inflate the correlation. Fig 2.2 shows the same numbers as heatmaps.
 
 A higher number is a stronger link between the station and the generation. What matters is the gap between the stations: if one station is clearly lower it is not worth using, and if several stations are close to each other they carry similar information.
 
 ```{python}
 # =============================================================================
-# CELL 2.1 -- Correlation of each asset with each station (wind speed for wind, GHI for solar)
+# CELL 2.3 -- Correlation of each asset with each station (wind speed for wind, GHI for solar)
 # Pearson correlation on half-hours where both values exist; wind uses every half-hour,
 # solar uses daytime half-hours only. The portfolio row uses the summed generation.
 # The chosen stations are set in cfg (wind_stations, solar_stations); the checks below confirm the choice.
@@ -155,10 +251,10 @@ wind_port, solar_port = corr_wind.loc['WIND portfolio'], corr_solar.loc['SOLAR p
 top_wind = sorted(wind_port.sort_values(ascending=False).index[:2])        # the two highest stations for wind
 solar_spread = solar_port.max() - solar_port.min()                         # gap between the best and worst solar station
 
-table_title('Table 2.1 - Wind: correlation of wind speed with the generation of each farm',
+table_title('Table 2.2 - Wind: correlation of wind speed with the generation of each farm',
             f'Half-hourly, all half-hours with generation; highest for the portfolio: stations {top_wind[0]} and {top_wind[1]}')
 display(corr_wind.round(3))
-table_title('Table 2.2 - Solar: correlation of GHI with the generation of each farm',
+table_title('Table 2.3 - Solar: correlation of GHI with the generation of each farm',
             f'Half-hourly, daytime only; the three stations are within {solar_spread:.2f} of each other for the portfolio')
 display(corr_solar.round(3))
 
@@ -170,7 +266,7 @@ axes[1].set_title('GHI vs solar generation', loc='left', fontsize=10)
 for ax in axes:
     ax.set_xlabel('Station')
 fig.tight_layout()
-add_titles(fig, 'Fig 2.1 - Correlation of each asset with each weather station',
+add_titles(fig, 'Fig 2.2 - Correlation of each asset with each weather station',
            f'Wind: stations {top_wind[0]} and {top_wind[1]} are the highest ({wind_port[top_wind[0]]:.2f} and {wind_port[top_wind[1]]:.2f}); '
            f'solar: the three stations are close ({solar_port.min():.2f} to {solar_port.max():.2f})')
 plt.show()

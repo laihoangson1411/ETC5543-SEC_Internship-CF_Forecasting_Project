@@ -31,7 +31,7 @@ title: "Contract factor forecast FY27-29"
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (utilsConfig.py) and loads the data.
 # Models are retrained on all the history (train_fys = FY23-26). `test_fys` stays at FY26 only because
 # run_all_models needs a test year to run; its in-sample scores are not used.
 #  - the half-hourly price (for the price split and the depth model) and the weather come from utilsData
@@ -47,32 +47,54 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
+from utilsConfig import DATA_DIR, make_cfg
 from utilsPlot import PURPLE, set_style, add_titles, table_title, fy_separators
-from utilsData import (load_generation_inputs, load_weather_history, add_calendar_features,
-                       monthly_station_mean, build_twap_split_monthly, month_start)
-from utilsScenario import load_forecast_twap_monthly, load_lgc_monthly, fit_depth_model, build_scenario_table
+from utilsData import (
+    load_generation_inputs,
+    load_weather_history,
+    add_calendar_features,
+    monthly_station_mean,
+    build_twap_split_monthly,
+    month_start,
+)
+from utilsScenario import (
+    load_forecast_twap_monthly,
+    load_lgc_monthly,
+    fit_depth_model,
+    build_scenario_table,
+)
 from utilsModels import run_all_models, predict_method, predict_exponential
 
 cfg = make_cfg(train_fys=[2023, 2024, 2025, 2026])
-np.random.seed(cfg['random_seed'])
+np.random.seed(cfg["random_seed"])
 set_style(small_fonts=True)
 
-gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
-weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=True)    # wind speed: quantile-mapped
-price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
+gen_scaled, _, _ = load_generation_inputs(
+    cfg, DATA_DIR
+)  # only the half-hourly VIC1 price is used
+weather_hh, _ = load_weather_history(
+    cfg, DATA_DIR, apply_qm=True
+)  # wind speed: quantile-mapped
+price_hh = gen_scaled["VIC1Price"]  # half-hourly VIC1 price ($/MWh)
 
-lgc_m = load_lgc_monthly(cfg['lgc_csv'])                              # historical monthly LGC price, month-start index
-print(f'LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}')
-print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+lgc_m = load_lgc_monthly(
+    cfg["lgc_csv"]
+)  # historical monthly LGC price, month-start index
+print(f"LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}")
+print(
+    f"Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols"
+)
 ```
 
 ```{python}
@@ -224,7 +246,7 @@ Table 3.1 gives the number of months each model was trained on and the Ridge alp
 ```{python}
 # =============================================================================
 # CELL 3.2 -- Wind: features and models retrained on all the history
-# The models and their features come from config.py (cfg['models'], cfg['wind_features']), the same as WindCF_Analysis.qmd.
+# The models and their features come from utilsConfig.py (cfg['models'], cfg['wind_features']), the same as WindCF_Analysis.qmd.
 # run_all_models fits on cfg['train_fys'] (FY23-26 here); its test scores are in-sample and not used.
 # =============================================================================
 

@@ -27,7 +27,7 @@ title: "Wind contract factor: models and FY26 test"
 ```{python}
 # =============================================================================
 # CELL 1.1 -- Imports, configuration and data loading
-# Imports libraries and the project functions, takes the shared `cfg` (config.py) and loads the data.
+# Imports libraries and the project functions, takes the shared `cfg` (utilsConfig.py) and loads the data.
 #  - monthly CF and TWAP come from processed/HistoricContractFactors.csv (written by IDA_ContractFactors.qmd)
 #  - the half-hourly price (for the price split) and the half-hourly weather come from utilsData
 #    (wind speed uses the quantile-mapped file written by Wind_QuantileMapping.qmd)
@@ -43,38 +43,60 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from IPython.display import display
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/'),
 # whether the cwd is the root (VS Code / Jupyter) or analysis/ (quarto render)
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(0, os.path.join(ROOT, "functions"))
 
-from config import DATA_DIR, make_cfg
+from utilsConfig import DATA_DIR, make_cfg
 from utilsPlot import PURPLE, GREY, SEASON_STYLE, set_style, add_titles, table_title
 from utilsContractFactors import expfunctionCF
-from utilsData import (load_generation_inputs, load_weather_history, add_calendar_features,
-                       monthly_station_mean, build_twap_split_monthly, month_start)
-from utilsScenario import load_forecast_twap_monthly, load_lgc_monthly, fit_depth_model, build_scenario_table
+from utilsData import (
+    load_generation_inputs,
+    load_weather_history,
+    add_calendar_features,
+    monthly_station_mean,
+    build_twap_split_monthly,
+    month_start,
+)
+from utilsScenario import (
+    load_forecast_twap_monthly,
+    load_lgc_monthly,
+    fit_depth_model,
+    build_scenario_table,
+)
 from utilsModels import run_all_models, predict_method, predict_exponential
 
 cfg = make_cfg()
-np.random.seed(cfg['random_seed'])
+np.random.seed(cfg["random_seed"])
 set_style(small_fonts=True)
 
-gen_scaled, _, _ = load_generation_inputs(cfg, DATA_DIR)              # only the half-hourly VIC1 price is used
-weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=True)    # wind speed: quantile-mapped
-price_hh = gen_scaled['VIC1Price']                                    # half-hourly VIC1 price ($/MWh)
+gen_scaled, _, _ = load_generation_inputs(
+    cfg, DATA_DIR
+)  # only the half-hourly VIC1 price is used
+weather_hh, _ = load_weather_history(
+    cfg, DATA_DIR, apply_qm=True
+)  # wind speed: quantile-mapped
+price_hh = gen_scaled["VIC1Price"]  # half-hourly VIC1 price ($/MWh)
 
 # Price forecast -> monthly TWAP (the forecast T)
-T_forecast = load_forecast_twap_monthly(cfg['price_forecast_csv'])
-print(f'Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}')
+T_forecast = load_forecast_twap_monthly(cfg["price_forecast_csv"])
+print(
+    f"Price forecast: {len(T_forecast)} months, {T_forecast.index.min():%Y-%m} to {T_forecast.index.max():%Y-%m}"
+)
 
-lgc_m = load_lgc_monthly(cfg['lgc_csv'])                              # monthly LGC price, month-start index
-print(f'LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}')
+lgc_m = load_lgc_monthly(cfg["lgc_csv"])  # monthly LGC price, month-start index
+print(f"LGC prices: {lgc_m.index.min():%Y-%m} to {lgc_m.index.max():%Y-%m}")
 
-print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
+print(
+    f"Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols"
+)
 ```
 
 ```{python}
@@ -113,7 +135,7 @@ display(df_wind.tail(3).round(3))
 ```{python}
 # =============================================================================
 # CELL 2.1 -- Wind feature set and VIF
-# The models and their features come from config.py (cfg['models'], cfg['wind_features']; EDIT THERE, so that
+# The models and their features come from utilsConfig.py (cfg['models'], cfg['wind_features']; EDIT THERE, so that
 # CF_Forecast_FY27-29.qmd uses the same set). Seasonal Naive uses CF_lag12 and the Exponential
 # baseline uses the plain twap, so neither has an entry. The Ensemble is the mean of RF and XGBoost.
 # The VIF of the Linear features (training years only) checks multicollinearity:

@@ -77,7 +77,7 @@ editor: visual
 # The report reads the results written by the analysis notebooks (render them first, see README.md):
 #   monthly_cf  monthly contract factors (data/processed/HistoricContractFactors.csv, IDA_ContractFactors.qmd)
 #   forecasts   FY27-29 forecast of each model (data/forecast/FY27-29_<Model>.csv, CF_Forecast_FY27-29.qmd)
-# The configuration and the plot style are the ones of the notebooks (functions/config.py, functions/utilsPlot.py).
+# The configuration and the plot style are the ones of the notebooks (functions/utilsConfig.py, functions/utilsPlot.py).
 # =============================================================================
 
 import glob, os, sys, warnings
@@ -86,21 +86,32 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
 # Find the project root (the folder that contains 'functions/')
-ROOT = next(p for p in [os.getcwd(), os.path.dirname(os.getcwd())]
-            if os.path.isdir(os.path.join(p, 'functions')))
-sys.path.append(os.path.join(ROOT, 'functions'))
+ROOT = next(
+    p
+    for p in [os.getcwd(), os.path.dirname(os.getcwd())]
+    if os.path.isdir(os.path.join(p, "functions"))
+)
+sys.path.insert(
+    0, os.path.join(ROOT, "functions")
+)  # first, so project modules win over installed packages
 
-from config import FORECAST_DIR, make_cfg
+from utilsConfig import FORECAST_DIR, make_cfg
 from utilsPlot import set_style, add_titles, table_title
 from utilsData import add_calendar_features
 
 cfg = make_cfg()
 set_style(small_fonts=True)
 
-monthly_cf = add_calendar_features(pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True))
-forecasts = {os.path.basename(p)[len('FY27-29_'):-len('.csv')]: pd.read_csv(p, parse_dates=['Time-ending'])
-             for p in sorted(glob.glob(os.path.join(FORECAST_DIR, 'FY27-29_*.csv')))}
+monthly_cf = add_calendar_features(
+    pd.read_csv(cfg["cf_csv"], index_col=0, parse_dates=True)
+)
+forecasts = {
+    os.path.basename(p)[len("FY27-29_") : -len(".csv")]: pd.read_csv(
+        p, parse_dates=["Time-ending"]
+    )
+    for p in sorted(glob.glob(os.path.join(FORECAST_DIR, "FY27-29_*.csv")))
+}
 ```

@@ -360,7 +360,7 @@ for ax, stn in zip(axes, QM_STATIONS):
 fig.supylabel('Density', fontsize=9)
 fig.tight_layout()
 bottom_legend(fig, ncol=2)
-add_titles(fig, f'Wind speed corruption ({CORRUPT_START:%-d %b %Y} - {CORRUPT_END:%-d %b %Y})')
+add_titles(fig, f'Wind speed corruption ({CORRUPT_START.day} {CORRUPT_START:%b %Y} - {CORRUPT_END.day} {CORRUPT_END:%b %Y})')   # .day: %-d does not work on Windows
 plt.show()
 ```
 

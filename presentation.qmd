@@ -265,6 +265,17 @@ dictionary_table('data/dictionary/variables_solar.csv')
 
 ## Feature selection - SOLAR Model
 
+::: {style="width: 509px; margin-top: 8px;"}
+-   For Solar, only twap_neg is clearly linked to SOLAR_CF (r −0.40); the weather variables are weakly correlated (|r| ≤ 0.11), so the price structure drives solar CF more than the sunshine itself.
+-   We kept ghi as the physical driver and dropped redundant variables: dni (r 0.91 with ghi), air_temp_c (r 0.89 with ghi; tested and did not lower the forecast error) and twap (r 0.98 with twap_pos).
+-   VIF flags ghi and month_cos (VIF ≈ 22, r 0.95): both follow the seasons. We keep both, because RF, the model used for the forecast, is not affected by correlated inputs, and Ridge shrinks them.
+-   **Solar features: ghi, twap_neg, twap_pos, month_sin, month_cos**
+:::
+
+::: {.abs .fig style="left: 560px; top: 38px; width: 640px;"}
+{{< embed analysis/EDA.qmd#corr-solar >}}
+:::
+
 
 ## Result for SOLAR CF - Overview
 

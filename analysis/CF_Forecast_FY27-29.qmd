@@ -61,7 +61,7 @@ ROOT = next(
 sys.path.insert(0, os.path.join(ROOT, "functions"))
 
 from utilsConfig import DATA_DIR, make_cfg
-from utilsPlot import PURPLE, set_style, add_titles, bottom_legend, table_title, fy_separators
+from utilsPlot import PURPLE, MODEL_COLORS, set_style, add_titles, bottom_legend, table_title, fy_separators
 from utilsData import (
     load_generation_inputs,
     load_weather_history,
@@ -223,8 +223,6 @@ The wind and the solar parts run the same steps with their own target, weather a
 FINAL_MODEL = {'WIND': 'Ensemble', 'SOLAR': 'RF'}
 MODEL_ORDER = cfg['models'] + ['Ensemble']                          # Ensemble = mean of RF and XGBoost
 BASELINES = ['Exponential']
-MODEL_COLOUR = {'Linear': '#4C72B0', 'Ridge': '#E67E22', 'RF': '#55A868', 'XGBoost': '#C44E52',
-                'Ensemble': '#8172B3', 'Exponential': '#999999'}
 SOURCE_COLOUR = {'forecast': '#2980B9', 'ASX_Sep': '#E67E22', 'ASX_Aug': '#27AE60'}
 
 monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
@@ -305,7 +303,7 @@ def show_results(fc, d, asset, section):
     ax.plot(month_start(hist.index), hist.values, color=PURPLE, lw=1.8, label='Actual CF (FY23-26)')
     for m in fc['method'].unique():
         sub = fc[(fc['t_source'] == T_MAIN) & (fc['method'] == m)].sort_values('month')
-        ax.plot(month_start(sub['month']), sub['CF_median'], color=MODEL_COLOUR[m], ls='--' if m in BASELINES else '-',
+        ax.plot(month_start(sub['month']), sub['CF_median'], color=MODEL_COLORS[m], ls='--' if m in BASELINES else '-',
                 lw=2.4 if m == final else 1.2, label=f'{m} (forecast model)' if m == final else m)
     ax.axvline(pd.Timestamp(f'{FORECAST_FYS[0] - 1}-07-01'), color='#999999', lw=0.8, ls=':')
     ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=[1, 7]))

@@ -29,6 +29,10 @@ SEASON_STYLE = {1: ('Summer', '#C44E52', 'o'), 2: ('Autumn', '#DD8452', 's'),
 IMPORTANCE_COLORS = {'Raises CF (linear models)': '#2ca02c', 'Lowers CF (linear models)': '#d62728',
                      'Share of importance (tree models)': 'steelblue'}
 
+# One colour per model (forecast plots of WindCF / SolarCF / CF_Forecast); baselines in grey
+MODEL_COLORS = {'Linear': '#4C72B0', 'Ridge': '#E67E22', 'RF': '#55A868', 'XGBoost': '#C44E52',
+                'Ensemble': '#8172B3', 'Exponential': '#AAAAAA', 'Seasonal Naive': '#777777'}
+
 # Correlation colour map: -1 = orange, 0 = white, +1 = purple
 CORR_CMAP = LinearSegmentedColormap.from_list('orange_purple', [ORANGE, 'white', PURPLE])
 
@@ -184,3 +188,28 @@ def dictionary_table(path, bold_cols=2, css_class='dd'):
         out.append('<tr>' + ''.join(cells) + '</tr>')
     # data-quarto-disable-processing: Quarto keeps the HTML table as it is (otherwise it sets equal column widths)
     return HTML(f'<table class="{css_class}" data-quarto-disable-processing="true">' + ''.join(out) + '</table>')
+
+
+def mae_ranking_table(mae, baselines, models):
+    """MAE table of the slides: the baselines first, then the models from the lowest MAE (shaded purple, darker =
+    lower MAE; the lowest is bold). Colours are inline, so the table looks the same in a notebook and on a slide."""
+    head = f'background:{PURPLE}; color:#fff; font-weight:700; text-align:left; padding:6px 12px;'
+    cell = 'padding:6px 12px; border:0;'
+    ranked = mae.reindex(models).dropna().sort_values()
+    lo, hi = ranked.min(), ranked.max()
+    shade = LinearSegmentedColormap.from_list('mae', ['#EBE7F0', '#B5A3C6'])      # worst -> best
+
+    def row(name, value, bg='#fff', bold=False):
+        v = f'<b>{value:.3f}</b>' if bold else f'{value:.3f}'
+        return (f'<tr><td style="{cell} color:{PURPLE};">{name}</td>'
+                f'<td style="{cell} background:{bg}; text-align:center;">{v}</td></tr>')
+
+    out = [f'<tr><th style="{head}">Benchmark</th><th style="{head} text-align:center;">MAE</th></tr>']
+    out += [row(b, mae[b]) for b in baselines]
+    out.append(f'<tr><th style="{head}">Model</th><th style="{head} text-align:center;">MAE</th></tr>')
+    for m, v in ranked.items():
+        t = 1 - (v - lo) / (hi - lo) if hi > lo else 1
+        r, g, b, _ = shade(t)
+        out.append(row(m, v, f'rgb({r * 255:.0f},{g * 255:.0f},{b * 255:.0f})', bold=v == lo))
+    return HTML('<table class="mae" style="border-collapse:collapse;" data-quarto-disable-processing="true">'
+                + ''.join(out) + '</table>')

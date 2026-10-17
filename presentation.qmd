@@ -181,6 +181,22 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 
 ## WIND CF Overview
 
+<p class="sub">Training set: FY23-25, Test set: FY26. Model comparison using MAE</p>
+
+::: {.abs .fig style="left: 36px; top: 100px; width: 745px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-test-models >}}
+:::
+
+::: {.abs .mae-box style="left: 840px; top: 118px; width: 404px;"}
+{{< embed analysis/WindCF_Analysis.qmd#wind-mae-table >}}
+:::
+
+::: {.abs style="left: 36px; top: 548px; width: 1208px;"}
+-   Ensemble, XGBoost and Ridge are the most accurate (MAE 0.085–0.090), and the gap between them is small
+-   All models beat both baselines but miss the October trough. Ridge reaches the December peak but over-predicts October-November.
+-   Choose best 3 models
+:::
+
 
 ## WIND CF Best models
 

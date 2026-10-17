@@ -18,7 +18,7 @@ title: "Solar contract factor: models and FY26 test"
 
 4. Forecast the test year with a forecast TWAP: LGC link, forecast rows, evaluation
 
-5. Forecast plots: MAE by model, feature importance of every model and monthly forecast of the two models compared
+5. Forecast plots: every model in the test year with its MAE, MAE by model, feature importance of every model and monthly forecast of the two models compared
 
 **Next.** `CF_Forecast_FY27-29.qmd` (part 4, Solar) retrains the models on FY23-26 and forecasts FY27-29.
 
@@ -58,11 +58,13 @@ from utilsPlot import (
     PURPLE,
     GREY,
     IMPORTANCE_COLORS,
+    MODEL_COLORS,
     set_style,
     add_titles,
     bottom_legend,
     table_title,
     importance_bars,
+    mae_ranking_table,
 )
 from utilsData import (
     load_generation_inputs,
@@ -309,15 +311,52 @@ display(cov)
 
 ## 5. Forecast plots
 
+### Every model in the test year
+
+The scenario forecast (T = forecast, median over the historical years) of every model against the actual CF of FY26, and their MAE: the baselines first, then the models from the lowest MAE (darker = lower MAE).
+
+```{python}
+#| label: solar-test-models
+# =============================================================================
+# CELL 5.1 -- Monthly forecast of every model and of the Exponential baseline vs the actual CF, test year
+# =============================================================================
+
+mae_main = mae_all.xs(T_MAIN, level='t_source')
+actual = df_solar.loc[TEST_MONTHS, 'target']
+fig, ax = plt.subplots(figsize=(10, 5.2))
+ax.plot(month_start(actual.index), actual.values, color=PURPLE, lw=2, marker='o', ms=4, label='Actual CF')
+for m in MODEL_ORDER + ['Exponential']:
+    sub = agg_all[(agg_all['t_source'] == T_MAIN) & (agg_all['method'] == m)].set_index('month').sort_index()
+    ax.plot(month_start(sub.index), sub['pred_median'], color=MODEL_COLORS[m], lw=1.3, marker='o', ms=3,
+            ls='--' if m == 'Exponential' else '-', label=m)
+ax.set_ylim(0, None)
+ax.set_ylabel('Contract factor (CF)')
+ax.xaxis.set_major_locator(mdates.MonthLocator())
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+ax.tick_params(axis='x', rotation=45)
+fig.tight_layout()
+bottom_legend(fig, ncol=7)
+add_titles(fig, f'Forecast vs Actual CF, Test on FY{TEST_FYS[0] % 100}')
+plt.show()
+```
+
+```{python}
+#| label: solar-mae-table
+# =============================================================================
+# CELL 5.2 -- MAE of the baselines and of the models (lowest first), scenario forecast, test year
+# =============================================================================
+
+mae_ranking_table(mae_main, BASELINES, MODEL_ORDER)
+```
+
 ### MAE by model
 
 ```{python}
 # =============================================================================
-# CELL 5.1 -- MAE by model (scenario forecast, T = T_MAIN), sorted from lowest to highest,
+# CELL 5.3 -- MAE by model (scenario forecast, T = T_MAIN), sorted from lowest to highest,
 # with the baselines as horizontal lines
 # =============================================================================
 
-mae_main = mae_all.xs(T_MAIN, level='t_source')
 mae_models = mae_main.reindex(MODEL_ORDER).sort_values()       # lowest MAE first
 x = np.arange(len(mae_models))
 fig, ax = plt.subplots(figsize=(9, 4.5))
@@ -342,7 +381,7 @@ Feature importance of the five weather-driven models, fitted on the training yea
 
 ```{python}
 # =============================================================================
-# CELL 5.2 -- Feature importance of the five weather-driven models
+# CELL 5.4 -- Feature importance of the five weather-driven models
 # utilsModels.feature_importance returns (importance, signed). Top row: linear models; bottom row: tree models.
 # MODELS_SHOW: the two models of the last plot, a tree model and a linear model (EDIT HERE).
 # =============================================================================
@@ -373,8 +412,8 @@ The last plot compares two models (`MODELS_SHOW`): the RF (tree-based, the model
 
 ```{python}
 # =============================================================================
-# CELL 5.3 -- Monthly CF: history, actual test year and the scenario forecast of the two models of MODELS_SHOW
-# (set in cell 5.2: a tree model and a linear model); the shaded band is the min-max over the historical years.
+# CELL 5.5 -- Monthly CF: history, actual test year and the scenario forecast of the two models of MODELS_SHOW
+# (set in cell 5.4: a tree model and a linear model); the shaded band is the min-max over the historical years.
 # =============================================================================
 
 MODELS_PLOT = MODELS_SHOW

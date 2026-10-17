@@ -62,3 +62,7 @@
 .reveal .formula { font-size: 15px; color: var(--purple); }
 .reveal .formula .MathJax_Display { text-align: left !important; margin: 0 !important; }
 .reveal .formula p { margin: 0; }
+
+/* Result slides: italic line under the title, MAE table on the right */
+.reveal .slides section p.sub { font-style: italic; font-size: 18px; margin: -4px 0 0 0; }
+.reveal .mae-box table.mae { width: 100%; font-size: 20px; margin: 0; }

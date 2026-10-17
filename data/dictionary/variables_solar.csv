@@ -1,0 +1,8 @@
+Variable,,What it is,Why consider it
+VIC1 Price,twap,"Monthly mean of half-hourly VIC1 price, including negatives","TWAP is the CF denominator, and the current method uses it"
+,twap_neg,Mean price of the half-hours below $0,"DWAP floors negatives at $0 but TWAP does not, so deeper negatives raise CF"
+,twap_pos,Mean price of the half-hours at or above $0,Sets the level of the positive prices that make up DWAP
+Weather,ghi,Global horizontal irradiance,Main driver of solar output
+,dni,Direct normal irradiance (direct beam),Separates clear days from cloudy days
+,air_temp_c,Air temperature,Panel efficiency falls when it is hot
+Seasonality,"month_sin, month_cos",Month of the year as a circle,Captures the seasonal pattern of prices and generation

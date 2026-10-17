@@ -259,6 +259,9 @@ dictionary_table('data/dictionary/model_summary.csv', bold_cols=1, css_class='dd
 
 ## Variables - SOLAR CF Model
 
+```{python}
+dictionary_table('data/dictionary/variables_solar.csv')
+```
 
 ## Feature selection - SOLAR Model
 

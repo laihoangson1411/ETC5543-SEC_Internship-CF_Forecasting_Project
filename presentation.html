@@ -1177,7 +1177,7 @@ The seven VRET assets and three weather stations we use, and the candidate varia
 </section>
 <section id="assets-stations" class="slide level2">
 <h2>Assets &amp; Stations</h2>
-<div id="b36248bc" class="cell" data-execution_count="2">
+<div id="57677ba3" class="cell" data-execution_count="2">
 <div class="cell-output cell-output-display" data-execution_count="2">
 <table class="dd" data-quarto-disable-processing="true"><tbody><tr><th>Type</th><th>ID</th><th>Location</th><th>Notes</th></tr><tr><td class="grp" rowspan="4">Wind asset</td><td class="id">DUNDWF3</td><td>Dundonnell</td><td>Very clean history: only four 1-day exclusions.</td></tr><tr><td class="id">BRYB1WF1</td><td>Berrybank</td><td>Six short exclusions (longest 12 days).</td></tr><tr><td class="id">BULGANA1</td><td>Bulgana</td><td>Co-located battery (20 MW). Longest exclusion: Jun 2024 – Dec 2025 (578 days), plus other short ones.</td></tr><tr><td class="id">MRTLSWF1</td><td>Mortlake</td><td>Not yet online before Jun 2023, so no usable data in FY23.</td></tr><tr><td class="grp" rowspan="3">Solar asset</td><td class="id">WINTSF1</td><td>Winton</td><td>Two exclusions: Jul – Aug 2024 (61 days) and Nov 2024 – Jan 2025 (53 days).</td></tr><tr><td class="id">GLENSF1</td><td>Glenrowan</td><td>Started operating late: data begins 1 Dec 2023</td></tr><tr><td class="id">COHUNSF1</td><td>Cohuna</td><td>Many long exclusions, including Mar 2024 – Apr 2025 (376 days).</td></tr><tr><td class="grp" rowspan="3">Weather Station</td><td class="id">89002</td><td>Ballarat Aerodrome</td><td rowspan="3"><ul><li><b>Wind:</b> 89002 and 86338 are averaged because their wind speed correlates with generation (r = 0.32 - 0.47). <b>85280 is excluded</b> because it is weak (r = 0.06 - 0.20).</li><li><b>Solar:</b> all 3 stations are averaged because GHI correlations are almost identical (differences ≤ 0.02 for each asset), data quality checked.</li></ul></td></tr><tr><td class="id">86338</td><td>Melbourne (Olympic Park)</td></tr><tr><td class="id">85280</td><td>Latrobe Valley Airport</td></tr></tbody></table>
 </div>
@@ -1188,7 +1188,7 @@ We model CF at portfolio level (wind and solar), not asset by asset
 </section>
 <section id="variables---wind-cf-model" class="slide level2">
 <h2>Variables - WIND CF Model</h2>
-<div id="f61adc71" class="cell" data-execution_count="3">
+<div id="9ac536ed" class="cell" data-execution_count="3">
 <div class="cell-output cell-output-display" data-execution_count="3">
 <table class="dd" data-quarto-disable-processing="true"><tbody><tr><th colspan="2">Variable</th><th>What it is</th><th>Why consider it</th></tr><tr><td class="grp" rowspan="3">VIC1 Price</td><td class="id">twap</td><td>Monthly mean of half-hourly VIC1 price (1)</td><td>TWAP is the CF denominator, and the current method uses it</td></tr><tr><td class="id">twap_neg</td><td>Mean price of the half-hours below $0</td><td>DWAP floors negatives at $0 but TWAP does not, so deeper negatives raise CF</td></tr><tr><td class="id">twap_pos</td><td>Mean price of the half-hours at or above $0</td><td>Sets the level of the positive prices that make up DWAP</td></tr><tr><td class="grp" rowspan="5">Weather</td><td class="id">wind_speed_kph</td><td>Monthly mean wind speed</td><td>Main driver of wind output <b>(calibrated)</b></td></tr><tr><td class="id">temp_c</td><td>Monthly mean temperature</td><td>Related to air density and the seasonal cycle</td></tr><tr><td class="id">rh</td><td>Relative humidity</td><td>Humid air is less dense, so wind carries slightly less power at the same wind speed</td></tr><tr><td class="id">dp_c</td><td>Dew point</td><td>Direct measure of air moisture (unlike RH, it does not change with temperature).</td></tr><tr><td class="id">rainfall_mm</td><td>Monthly rainfall</td><td>Rainy weather systems such as fronts and storms are often windy.</td></tr><tr><td class="grp">Seasonality</td><td class="id">month_sin, month_cos</td><td>Month of the year as a circle (seasonal shape)</td><td>Captures the seasonal pattern of prices and generation</td></tr></tbody></table>
 </div>
@@ -1323,7 +1323,7 @@ How the FY27-29 scenario forecast is built, and the baselines and models we comp
 </section>
 <section id="model-summary" class="slide level2">
 <h2>Model Summary</h2>
-<div id="1d905c42" class="cell" data-execution_count="4">
+<div id="960dbf20" class="cell" data-execution_count="4">
 <div class="cell-output cell-output-display" data-execution_count="4">
 <table class="dd models" data-quarto-disable-processing="true"><tbody><tr><th>Model</th><th>Why this model</th><th>Parameters</th></tr><tr><td class="grp">Seasonal Naive</td><td>Simplest baseline: any model must beat &quot;same month last year&quot;.</td><td>None.</td></tr><tr><td class="grp">Exponential</td><td>The current method used by the team, so it is the benchmark to improve on.</td><td>CF = f(TWAP) with a and b per season (curve_fit), because the TWAP-CF link differs by season.</td></tr><tr><td class="grp">Linear</td><td>Transparent: coefficients show how each input moves CF.</td><td>None (least squares).</td></tr><tr><td class="grp">Ridge</td><td>Linear model with shrinkage: inputs are correlated (e.g. twap_neg, month_cos) and there are only 36 training months.</td><td>alpha = 10 (WIND)/ 1 (SOLAR), chosen by RidgeCV (15 values, 1-100) on FY23-25 only.<br>A larger alpha means stronger shrinkage and a more stable fit.</td></tr><tr><td class="grp">RandomForest</td><td>Captures non-linear effects and price-weather interactions without scaling the inputs.</td><td>n_estimators = 300, max_depth = 4, min_samples_leaf = 2. Shallow trees and a minimum leaf size limit overfitting on 36 rows. 300 trees give a stable average.</td></tr><tr><td class="grp">XGBoost</td><td>Boosted trees: non-linear like RF but learns from earlier errors.</td><td>n_estimators = 250, max_depth = 3, learning_rate = 0.05, subsample = 1.0, colsample_bytree = 1.0, reg_lambda = 1.0.<br>Small steps, shallow trees and random sampling keep it regularised.</td></tr><tr><td class="grp">Ensemble</td><td>Averaging two different tree models reduces the error of each one.</td><td>Mean of the RF and XGBoost predictions.</td></tr></tbody></table>
 </div>
@@ -1448,7 +1448,7 @@ Critically, <b>temporal rank order is preserved</b>: Spearman correlation with a
 </div>
 <div class="abs fig" style="left: 648px; top: 42px; width: 569px;">
 <div class="quarto-embed-nb-cell" data-notebook="/Users/lkyenn/ETC5543-SEC_Internship-CF_Forecasting_Project/analysis/Wind_QuantileMapping.qmd" data-notebook-title="Wind speed quantile mapping (QM)" data-notebook-cellid="cell-corruption-hist">
-<div id="cell-corruption-hist" class="cell" data-execution_count="6">
+<div id="cell-corruption-hist" class="cell" data-execution_count="5">
 <div class="cell-output cell-output-display">
 <div>
 <figure>
@@ -1461,7 +1461,7 @@ Critically, <b>temporal rank order is preserved</b>: Spearman correlation with a
 </div>
 <div class="abs fig" style="left: 656px; top: 372px; width: 561px;">
 <div class="quarto-embed-nb-cell" data-notebook="/Users/lkyenn/ETC5543-SEC_Internship-CF_Forecasting_Project/analysis/Wind_QuantileMapping.qmd" data-notebook-title="Wind speed quantile mapping (QM)" data-notebook-cellid="cell-monthly-ws-after-qm">
-<div id="cell-monthly-ws-after-qm" class="cell" data-execution_count="19">
+<div id="cell-monthly-ws-after-qm" class="cell" data-execution_count="9">
 <div class="cell-output cell-output-display">
 <div>
 <figure>

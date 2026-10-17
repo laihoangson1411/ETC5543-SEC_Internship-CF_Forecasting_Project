@@ -72,7 +72,8 @@ MODEL_FNS = {'Linear': run_linear, 'Ridge': run_ridge, 'RF': run_rf, 'XGBoost': 
 def fit_exponential(df, target_col, twap_col, season_col, train_fys):
     """Fit CF = f(TWAP) with `expfunctionCF` separately per season on the training years.
 
-    Returns the prediction for every row of df and the fitted parameters per season.
+    Returns the prediction for every row of df and the fitted parameters per season
+    ({'a', 'b', 'n'}; n = training months behind the curve, after dropping CF <= 0, CF >= 3 and TWAP <= 0).
     """
     params = {}
     for season in sorted(df[season_col].dropna().unique()):
@@ -81,9 +82,9 @@ def fit_exponential(df, target_col, twap_col, season_col, train_fys):
         sub = sub[(sub[target_col] > 0) & (sub[target_col] < 3) & (sub[twap_col] > 0)]
         try:
             popt, _ = curve_fit(expfunctionCF, sub[twap_col], sub[target_col], p0=[1.0, 1.0], maxfev=20000)
-            params[season] = {'a': popt[0], 'b': popt[1]}
+            params[season] = {'a': popt[0], 'b': popt[1], 'n': len(sub)}
         except Exception:
-            params[season] = {'a': np.nan, 'b': np.nan}
+            params[season] = {'a': np.nan, 'b': np.nan, 'n': len(sub)}
 
     return pd.Series(predict_exponential(params, df[season_col], df[twap_col]), index=df.index), params
 

@@ -56,7 +56,7 @@ from utilsData import (load_generation_inputs, load_weather_history, build_targe
 cfg = make_cfg()        # train_fys are the years used for the best-station check
 set_style()
 
-gen_scaled, vret_data, capacity = load_generation_inputs(cfg, DATA_DIR)
+gen_scaled, _, capacity = load_generation_inputs(cfg, DATA_DIR)
 weather_hh, _ = load_weather_history(cfg, DATA_DIR, apply_qm=False)
 
 print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')

@@ -61,11 +61,11 @@ sys.path.append(os.path.join(ROOT, 'functions'))
 
 from config import DATA_DIR, make_cfg
 from utilsPlot import GREY, ORANGE, PURPLE, add_titles, table_title
-from utilsData import load_generation_inputs, load_weather_history, to_naive_timestamp
+from utilsData import load_generation_inputs, load_weather_history
 
 cfg = make_cfg()        # cfg['wind_csv'] is the raw DTN weather (not QM)
 
-gen_scaled, vret_data, vret_capacity = load_generation_inputs(cfg, DATA_DIR)
+gen_scaled, _, vret_capacity = load_generation_inputs(cfg, DATA_DIR)
 weather_hh, weather_raw = load_weather_history(cfg, DATA_DIR, apply_qm=False)
 
 print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {weather_hh.shape[1]} cols')
@@ -498,7 +498,7 @@ plt.show()
 if first_bad_day:
     n_clean = len(oct25_daily[oct25_daily.index < first_bad_day])
     n_bad   = len(oct25_daily) - n_clean
-    print(f'\n=== SUMMARY ===')
+    print('\n=== SUMMARY ===')
     print(f'October 2025: {n_clean} clean days + {n_bad} corrupted days')
     print(f'Corruption starts: {first_bad_day.strftime("%Y-%m-%d")}')
     print(f'\u2192 When applying QM: only from {first_bad_day.strftime("%d/%m")} onward, keeping the earlier clean data unchanged.')
@@ -975,7 +975,7 @@ print(f'  QM window: {CORRUPT_START.date()} → {CORRUPT_END.date()} ({in_window
 table_title('Table 7.1 - First rows of the saved QM file')
 display(df_wide.head())
 
-print(f'\n═══ QM window: statistics ═══')
+print('\n═══ QM window: statistics ═══')
 qm_section = df_wide[in_window]
 for stn in QM_STATIONS:
     ws_col = f'wind_speed_kph_{stn}'

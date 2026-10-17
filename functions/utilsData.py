@@ -210,7 +210,9 @@ def load_generation_inputs(cfg: Dict, data_dir: str):
                              * gen_assets['FY'].map(mlf[asset])
                              * vret.loc[asset, 'Contracted Capacity'])
     gen_scaled = gen_assets.loc[cfg['analysis_start']:cfg['analysis_end'], all_assets].join(price_data)
-    # Manually blank BULGANA1 for Dec 2025 - Jan 2026 (kept from the original notebook)
+    # BULGANA1 is excluded from 2024-06-01 to 2025-12-31, but ExclusionEnd is read as 00:00, so the rest of
+    # 31 Dec 2025 would keep its 47 half-hours; blank it. January 2026 is already blank: its 20 Jan - 3 Feb
+    # exclusion covers 10+ days of the month, so extend_exclusion_periods extends it to the whole month.
     gen_scaled.loc['2025-12-01':'2026-01-31', 'BULGANA1'] = np.nan
 
     capacity['WIND'] = sum(capacity[a] for a in cfg['wind_assets'])

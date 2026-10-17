@@ -108,7 +108,7 @@ print(f'Weather columns: {wx.shape[1]} ({len(DTN_VARS)} DTN + {len(SOL_VARS)} So
 ```{python}
 # =============================================================================
 # CELL 1.2 -- Plot style (annotated heatmaps use utilsPlot.annotated_heatmap)
-# Colours: purple and orange (utilsPlot), as in the other files. Correlations use CORR_CMAP (-1 orange, +1 purple).
+# Colours: purple and orange (utilsPlot). Correlations use CORR_CMAP (-1 orange, +1 purple).
 # =============================================================================
 
 HEAT = LinearSegmentedColormap.from_list('purple', ['#F3EEF8', PURPLE])             # 0 (light) -> 1 (purple)
@@ -291,7 +291,7 @@ rows = []
 for var in VARS:
     for s in STATIONS:
         x = wx[f'{var}_{s}']
-        n_gaps, longest, n_long = gap_stats(x)
+        _, longest, n_long = gap_stats(x)
         rows.append({'variable': var, 'station': s, 'missing %': x.isna().mean() * 100,
                      'longest gap': longest, f'gaps > {INTERP_LIMIT}': n_long})
 miss_long = pd.DataFrame(rows)

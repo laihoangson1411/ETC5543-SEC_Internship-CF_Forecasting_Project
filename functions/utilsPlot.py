@@ -15,7 +15,6 @@ from IPython.display import display, Markdown
 PURPLE = '#391B56'
 ORANGE = '#E67E22'
 GREY = '#888888'
-RED = '#C0392B'
 ASSET_COLORS = ['#2171B5', '#D62728', '#7B3FA0', '#E6B800']    # one colour per asset in a panel
 
 # Season code (1=Summer, 2=Autumn, 3=Winter, 4=Spring) -> (name, colour, marker)

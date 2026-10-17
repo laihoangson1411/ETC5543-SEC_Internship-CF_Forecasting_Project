@@ -150,7 +150,7 @@ def calcMonthlyContractFactors(generationTrace, assets, capacity, extraCol=None,
         # Calculate Capacity Factor (Convert Volume to MW / Capacity in MW)
         tempGenerationTrace.loc[:,[f'{asset}_CapFactor']] = convertUnits(tempGenerationTrace[asset], origUnits='MWh', outputUnits='MW') / capacity[asset]
 
-        # Remove the price from Asset_TWA for any periods that the asset was offline
+        # Remove the price from Asset_TWAP for any periods that the asset was offline
         tempGenerationTrace.loc[:,['VIC1Price']] = tempGenerationTrace['VIC1Price'].where(~tempGenerationTrace[asset].isna())
 
         generationTraceResampled = tempGenerationTrace.resample('ME').apply(custom_agg, asset)

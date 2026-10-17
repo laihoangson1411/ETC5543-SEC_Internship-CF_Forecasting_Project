@@ -93,8 +93,7 @@ print(f'  {len(cf_monthly)} months ({cf_monthly.index.min():%Y-%m} -> {cf_monthl
 back = pd.read_csv(fpath, index_col='Time-ending', parse_dates=True)
 ok = (list(back.columns) == list(cf_monthly.columns)
       and len(back) == len(cf_monthly) and bool((back.index == cf_monthly.index).all())
-      and bool((back.isna().values == cf_monthly.isna().values).all())
-      and float(np.nanmax(np.abs(back.values - cf_monthly.values))) < 1e-9)
+      and np.allclose(back.values, cf_monthly.values, rtol=1e-12, atol=1e-9, equal_nan=True))   # relative: revenues are large
 print(f'  read-back check (columns, months, missing cells, values): {"passed" if ok else "FAILED"}')
 add_check('Saved CSV differs from the table in memory', int(not ok))
 
@@ -294,8 +293,7 @@ These are the periods set to missing in the generation data, so the gaps in Fig 
 # One horizontal bar per asset (wind on top, solar below):
 #  - light grey: before the asset came online / commissioning;  green: available
 #  - gold / orange / red: exclusion periods by length (<14d, 14-90d, >90d)
-# Same colours and rules as the project notebook. The online date of an asset is its first
-# half-hour with positive generation in the raw file.
+# The online date of an asset is its first half-hour with positive generation in the raw file.
 # =============================================================================
 
 import matplotlib.dates as mdates
@@ -535,3 +533,19 @@ else:
 add_check(f'Months flagged as outliers (|robust z| > {Z_LIMIT})', len(rows), info=True)
 ```
 
+### 5.5 Summary of the checks
+
+Every check of this file in one table. `OK` means no problem, `CHECK` means something should be looked at, and `INFO` means the result is expected (for example the months before an asset started).
+
+```{python}
+# =============================================================================
+# CELL 5.5 -- Summary of every check recorded with add_check in the cells above
+# =============================================================================
+
+check_tbl = pd.DataFrame(checks).set_index('check')
+n_to_look = int((check_tbl['status'] == 'CHECK').sum())
+table_title('Table 5.5 – Summary of the checks',
+            f'{len(check_tbl)} checks: {n_to_look} to look at (CHECK), the INFO rows are expected')
+with pd.option_context('display.max_colwidth', None):
+    display(check_tbl)
+```

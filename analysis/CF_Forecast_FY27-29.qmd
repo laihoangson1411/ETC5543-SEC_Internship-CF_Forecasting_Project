@@ -147,10 +147,9 @@ asx['date'] = pd.to_datetime(asx['date'], dayfirst=True)
 asx = asx.dropna(subset=['date']).drop_duplicates(subset='date').set_index('date').sort_index()   # the file ends with empty rows
 asx.index = asx.index + pd.offsets.MonthEnd(0)           # month-end label, like the other monthly tables
 
-T_ALL = {'ASX_Sep': asx['September'].reindex(future_months), 'ASX_Aug': asx['August'].reindex(future_months)}
-if 'forecast' in USE_SOURCES:
-    T_ALL['forecast'] = load_forecast_twap_monthly(cfg['price_forecast_csv']).reindex(future_months)
-T_BY_SOURCE = {src: T_ALL[src] for src in USE_SOURCES}
+T_LOADERS = {'ASX_Sep': lambda: asx['September'], 'ASX_Aug': lambda: asx['August'],
+             'forecast': lambda: load_forecast_twap_monthly(cfg['price_forecast_csv'])}   # read only if used
+T_BY_SOURCE = {src: T_LOADERS[src]().reindex(future_months) for src in USE_SOURCES}
 for src, t in T_BY_SOURCE.items():
     assert t.notna().all(), f'T source {src} is missing months: {[m.strftime("%Y-%m") for m in t[t.isna()].index]}'
 
@@ -191,7 +190,7 @@ The last rows are the most recent months. A `twap_neg` of NaN means that month h
 
 ```{python}
 # =============================================================================
-# CELL 3.1 -- Wind: monthly feature table df_wind (same as WindCF_Analysis.qmd, cell 1.2)
+# CELL 3.1 -- Wind: monthly feature table df_wind (built as in WindCF_Analysis.qmd)
 #  twap_neg / twap_pos  monthly mean of the negative / non-negative half-hourly prices
 #  neg_share            share of half-hours with a negative price
 #  wind_speed_kph, rh   monthly mean over the wind stations

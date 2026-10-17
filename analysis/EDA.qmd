@@ -82,7 +82,7 @@ print(f'Generation: {gen_scaled.shape}, Weather: {weather_hh.shape[0]} rows x {w
 #  monthly_target  monthly CF and TWAP of every asset and portfolio (HistoricContractFactors.csv) + calendar features
 #  wind weather    wind_speed_kph, temp_c, rh, dp_c, rainfall_mm (mean of the wind stations)
 #  solar weather   ghi, dni, air_temp_c (mean of the solar stations); solar_proxy and solar_share from SolarProxy.csv
-#  Empty negative / positive bucket: NaN for wind, 0 for solar (as in the wind and solar analysis files)
+#  Empty negative / positive bucket: NaN for wind, 0 for solar
 # =============================================================================
 
 monthly_target = pd.read_csv(cfg['cf_csv'], index_col=0, parse_dates=True)   # monthly CF written by IDA_ContractFactors.qmd
@@ -239,10 +239,6 @@ exp_params, exp_pred, metric_rows, param_rows = {}, {}, [], []
 
 for tech, d in tables.items():
     _, exp_params[tech] = fit_exponential(d, 'target', 'twap', 'Season', TRAIN_FYS)
-    # Number of training months behind each curve (same filter as the fit)
-    fit_rows = d[d['FY'].isin(TRAIN_FYS)][['target', 'twap', 'Season']].dropna()
-    fit_rows = fit_rows[(fit_rows['target'] > 0) & (fit_rows['target'] < 3) & (fit_rows['twap'] > 0)]
-    n_train = fit_rows.groupby('Season').size()
 
     test = d[d['FY'].isin(TEST_FYS)]
     pred = pd.DataFrame({'actual_CF': test['target']})
@@ -252,7 +248,7 @@ for tech, d in tables.items():
 
     for season, p in exp_params[tech].items():
         param_rows.append({'tech': tech, 'season': season, 'a': p['a'], 'b': p['b'],
-                           'n_train': int(n_train.get(season, 0))})
+                           'n_train': p['n']})
     for label, col in [('actual TWAP', 'exp_actualT'), ('forecast TWAP', 'exp_forecastT')]:
         metric_rows.append({'tech': tech, 'TWAP used': label, **calculate_metrics(pred['actual_CF'], pred[col])})
 

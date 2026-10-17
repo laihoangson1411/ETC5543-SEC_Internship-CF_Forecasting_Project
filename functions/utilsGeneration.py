@@ -3,11 +3,6 @@ import numpy as np
 import datetime as dt
 import calendar
 
-#%% Setup of variables used within the filter function
-windAssets = ['BRYB1WF1', 'DUNDWF3', 'MRTLSWF1', 'BULGANA1']
-solarAssets = ['COHUNSF1', 'WINTSF1', 'GLENSF1','Fulham Solar Farm']
-assetsDefault = windAssets + solarAssets
-
 # This is a list of start dates determined manually based on the cleanliness of data after the official commision date.
 cleanDictDefault = {'BULGANA1':dt.datetime(2021,10,1), 
                     'WINTSF1':dt.datetime(2021,10,1), 
@@ -18,9 +13,8 @@ cleanDictDefault = {'BULGANA1':dt.datetime(2021,10,1),
                     'GLENSF1':dt.datetime(2024,4,1),
                     'Fulham Solar Farm':dt.datetime(2027,11,17)}
 
-def filter_generation_data(generationData:pd.DataFrame,
-                           exclusionPeriods:pd.DataFrame,extendExclusions:bool = False,
-                           assets:list = assetsDefault,cleanDict:dict = cleanDictDefault):
+def filter_generation_data(generationData:pd.DataFrame, exclusionPeriods:pd.DataFrame, assets:list,
+                           extendExclusions:bool = False, cleanDict:dict = cleanDictDefault):
     startDate = min(cleanDict.values())
     generationData = generationData[generationData.index>=startDate]
 

@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from IPython.display import display
+from IPython.display import display, HTML
 
 warnings.filterwarnings("ignore")
 
@@ -76,6 +76,8 @@ from utilsScenario import (
     load_lgc_monthly,
     fit_depth_model,
     shrink_factor,
+    load_lgc_forecast,
+    replay_example,
 )
 from utilsModels import fit_exponential, calculate_metrics, predict_exponential
 
@@ -243,13 +245,21 @@ def plot_corr_heatmap(corr: pd.DataFrame, cmap=CORR_CMAP, side: float = 6.0):
 
 
 def show_corr_heatmap(name: str, df: pd.DataFrame) -> pd.DataFrame:
-    """Correlation matrix of one technology ('WIND' or 'SOLAR'), drawn as a heatmap; returns the matrix."""
+    """Correlation matrix of one technology ('WIND' or 'SOLAR'), drawn as a heatmap; returns the matrix.
+
+    The features used by the models (cfg['wind_features'] / cfg['solar_features']) are in bold on both axes.
+    """
     t = f'{name}_CF'
     corr = correlation_matrix(df, HEATMAP_COLS[name], t)
     top = corr[t].drop(t).abs().idxmax()
     fig = plot_corr_heatmap(corr)
+    model_feats = set(cfg[f'{name.lower()}_features'])
+    ax = fig.axes[0]                                                  # the heatmap (axes 1 is the colour bar)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        if label.get_text() in model_feats:
+            label.set_fontweight('bold')
     add_titles(fig, f'{name}: correlation of monthly features (train FY{TRAIN_FYS[0] % 100}-{TRAIN_FYS[-1] % 100})',
-               f'Strongest link with {t}: {top} (r = {corr.loc[top, t]:.2f})')
+               f'Strongest link with {t}: {top} (r = {corr.loc[top, t]:.2f}); model features in bold')
     plt.show()
     return corr
 
@@ -541,4 +551,33 @@ for m_h in [pd.Timestamp(f'{y}-07-01') for y in range(TRAIN_FYS[0] - 1, TEST_FYS
                          'shrink factor': shrink_factor(m_h, m_f, lgc_m, MODE, (a_lgc, b_lgc))})
 table_title('Table 4.2 - shrink factor of historical negative prices', f'mode = {MODE}; 1.0 = no change')
 display(pd.DataFrame(rows).round(3))
+```
+
+**Example.** January 2023 replayed into January 2028, with the LGC forecast of 2028 and the 30-min price forecast of January 2028 as the target TWAP: step 1 shrinks the negative half-hours by `s`, step 2 scales the positive half-hours by `k` so that the month's TWAP equals the forecast.
+
+```{python}
+#| label: replay-example
+# =============================================================================
+# CELL 4.6 -- Example: one historical month replayed into a future month (utilsScenario.replay_example)
+# The same steps as the scenario forecast (build_scenario_features); the table is the one of the slides.
+# =============================================================================
+
+M_HIST, M_FUTURE = pd.Timestamp('2023-01-31'), pd.Timestamp('2028-01-31')       # month-end labels, like df_wind
+ex = replay_example(df_wind, M_HIST, M_FUTURE, T_forecast[M_FUTURE],
+                    lgc_hist=lgc_m[M_HIST.to_period('M').to_timestamp()],
+                    lgc_future=load_lgc_forecast(cfg['lgc_fc_csv'])[M_FUTURE.year], mode=MODE, depth_ab=(a_lgc, b_lgc))
+
+
+def money(v):
+    return f'-${-v:.2f}' if v < 0 else f'${v:.2f}'
+
+
+rows = [('LGC', f'<b>${ex["lgc"][0]:.0f}</b>', f'<b>${ex["lgc"][1]:.0f}</b> (forecast)'),
+        (f'Negative half-hours ({ex["neg_share"]:.0%} of month)', f'avg <b>{money(ex["twap_neg"][0])}</b>',
+         f'avg <b>{money(ex["twap_neg"][1])}</b> (s = {ex["s"]:.2f})'),
+        ('Positive half-hours', f'avg <b>{money(ex["twap_pos"][0])}</b>', f'avg <b>{money(ex["twap_pos"][1])}</b> (k = {ex["k"]:.2f})'),
+        ('Monthly TWAP', money(ex['twap'][0]), f'<b>{money(ex["twap"][1])}</b> ( = monthly forecasted price)')]
+HTML('<table class="dd ex" data-quarto-disable-processing="true">'
+     '<tr><th></th><th>Historical</th><th>After adjustment</th></tr>'
+     + ''.join(f'<tr><td>{a}</td><td>{b}</td><td>{c}</td></tr>' for a, b, c in rows) + '</table>')
 ```

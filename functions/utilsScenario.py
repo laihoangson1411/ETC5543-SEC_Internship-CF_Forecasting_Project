@@ -49,6 +49,13 @@ def load_lgc_monthly(path: str) -> pd.Series:
     return lgc['LGC'].resample('MS').mean().rename('lgc')
 
 
+def load_lgc_forecast(path: str) -> pd.Series:
+    """Forecast LGC price by calendar year (ForecastedLGCPrice.csv: TENOR 'Cal 26' -> 2026, MID POINT INDEX)."""
+    lgc = pd.read_csv(path, encoding='utf-8-sig')
+    lgc['year'] = 2000 + lgc['TENOR'].str.extract(r'(\d+)')[0].astype(int)
+    return lgc.set_index('year')['MID POINT INDEX']
+
+
 def fit_depth_model(price: pd.Series, lgc: pd.Series, how=0.05) -> dict:
     """Fit depth = a + b*LGC + c1*sin + c2*cos on the months where both depth and LGC exist.
 
@@ -184,3 +191,19 @@ def monthly_depth(price, how):
     if how == 'neg_mean':
         return (-price.where(price < 0).resample('MS').mean()).rename('depth')
     return (-price.resample('MS').quantile(how)).rename('depth')
+
+
+def replay_example(d, m_h, m_f, t_target, lgc_hist, lgc_future, mode, depth_ab):
+    """Price structure of historical month m_h before and after it is replayed into future month m_f.
+
+    Uses build_scenario_features, as the scenario forecast does: the negative prices are shrunk by s (LGC) and the
+    positive prices are scaled by k so that the month's TWAP equals t_target.
+
+    Returns:
+        dict with neg_share, s, k and (historical, adjusted) pairs for lgc, twap_neg, twap_pos and twap.
+    """
+    lgc = pd.Series([lgc_hist, lgc_future], index=[m_h.to_period('M').to_timestamp(), m_f.to_period('M').to_timestamp()])
+    hist = d.loc[m_h]
+    adj = build_scenario_features(d, m_h, m_f, t_target, hist['neg_share'], True, lgc, mode, depth_ab)
+    return {'neg_share': hist['neg_share'], 's': adj['twap_neg'] / hist['twap_neg'], 'k': adj['twap_pos'] / hist['twap_pos'],
+            **{c: (hist[c], adj[c]) for c in ['twap_neg', 'twap_pos', 'twap']}, 'lgc': (lgc_hist, lgc_future)}

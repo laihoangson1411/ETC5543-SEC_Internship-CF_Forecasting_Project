@@ -154,15 +154,9 @@ $$\text{TWAP} = n_s\,\bar{P}_{\text{neg}} + (1 - n_s)\,\bar{P}_{\text{pos}}$$
 :::
 
 <div class="bul" style="left: 36px; top: 437px;"><b>Example:</b> replaying January 2023 into January 2028</div>
-<div class="abs" style="left: 280px; top: 469px;">
-<table class="dd ex">
-<tr><th></th><th>Historical</th><th>After adjustment</th></tr>
-<tr><td>LGC</td><td><b>\$52</b></td><td><b>\$8</b> (forecast)</td></tr>
-<tr><td>Negative half-hours (27% of month)</td><td>avg <b>-\$42.55</b></td><td>avg <b>-\$21.68</b> (s = 0.51)</td></tr>
-<tr><td>Positive half-hours</td><td>avg <b>\$80.96</b></td><td>avg <b>\$102.03</b> (k = 1.26)</td></tr>
-<tr><td>Monthly TWAP</td><td>\$48.09</td><td><b>\$69.11</b> ( = monthly forecasted price)</td></tr>
-</table>
-</div>
+::: {.abs style="left: 280px; top: 469px;"}
+{{< embed analysis/EDA.qmd#replay-example >}}
+:::
 
 # Modelling & forecasting
 

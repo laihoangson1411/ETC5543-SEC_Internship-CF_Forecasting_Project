@@ -73,6 +73,7 @@ from utilsData import (
 from utilsScenario import (
     load_forecast_twap_monthly,
     load_lgc_monthly,
+    load_lgc_forecast,
     fit_depth_model,
     build_scenario_table,
 )
@@ -175,9 +176,7 @@ for src, t in T_BY_SOURCE.items():
 
 # --- LGC: history before FY27; every forecast month uses the forecast of its calendar year (ForecastedLGCPrice.csv) ---
 # The file has one row per calendar year: TENOR ('Cal 26') and MID POINT INDEX (the LGC price of that year).
-lgc_cal = pd.read_csv(cfg['lgc_fc_csv'], encoding='utf-8-sig')
-lgc_cal['year'] = 2000 + lgc_cal['TENOR'].str.extract(r'(\d+)')[0].astype(int)
-lgc_cal = lgc_cal.set_index('year')['MID POINT INDEX']
+lgc_cal = load_lgc_forecast(cfg['lgc_fc_csv'])                # forecast LGC price by calendar year
 months_start = future_months.to_period('M').to_timestamp()
 lgc_fc = pd.Series(lgc_cal.reindex(months_start.year).values, index=months_start)
 lgc_all = lgc_fc.combine_first(lgc_m)                    # the forecast price wins for the forecast months
